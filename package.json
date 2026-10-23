@@ -1,0 +1,16 @@
+{
+  "name": "comichub",
+  "productName": "ComicHub",
+  "version": "1.0.0",
+  "description": "三站合一的漫畫桌面版",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "pack": "node pack.js"
+  },
+  "devDependencies": {
+    "@electron/packager": "18.4.4",
+    "electron": "33.4.11"
+  }
+}

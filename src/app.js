@@ -1,0 +1,978 @@
+import { SITES, SITE_KEYS, LANGS, setLangFilter, loadConfig, getConfig } from './sites.js'
+import * as dl from './downloader.js'
+
+const $ = (s, el = document) => el.querySelector(s)
+const view = $('#view')
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
+const h = (tag, attrs = {}, ...kids) => {
+  const el = document.createElement(tag)
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') el.className = v
+    else if (k === 'html') el.innerHTML = v
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v)
+    else if (v !== false && v != null) el.setAttribute(k, v)
+  }
+  for (const kid of kids.flat()) if (kid != null) el.append(kid.nodeType ? kid : document.createTextNode(kid))
+  return el
+}
+
+// ---------- 本機儲存 ----------
+
+const store = {
+  get(k, d) {
+    try {
+      return JSON.parse(localStorage.getItem(k)) ?? d
+    } catch {
+      return d
+    }
+  },
+  set(k, v) {
+    try {
+      localStorage.setItem(k, JSON.stringify(v))
+    } catch {}
+  },
+}
+
+function addHistory(item, chapter) {
+  const list = store.get('history', []).filter((x) => !(x.site === item.site && x.id === item.id))
+  list.unshift({ site: item.site, id: item.id, title: item.title, cover: item.cover, lang: item.lang || '', sub: chapter ? `看到：${chapter}` : item.sub || '', time: Date.now() })
+  store.set('history', list.slice(0, 300))
+}
+
+let toastTimer
+function toast(msg) {
+  const t = $('#toast')
+  t.textContent = msg
+  t.classList.remove('hidden')
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => t.classList.add('hidden'), 2600)
+}
+
+const badge = (site, inline) => h('span', { class: `badge ${site}${inline ? ' inline' : ''}` }, SITES[site].label)
+const langBadge = (lang, inline) => (lang ? h('span', { class: `lang ${lang}${inline ? ' inline' : ''}` }, LANGS[lang]) : null)
+
+// ---------- 語言篩選 ----------
+
+let lang = store.get('lang', '')
+setLangFilter(lang)
+const passLang = (it) => !lang || it.lang === lang
+
+/**
+ * 依語言篩過的一頁。jm、wn 站只能在這邊篩，篩完可能一本都不剩，
+ * 這時自動往後多翻幾頁，免得使用者看到空白頁。
+ */
+async function loadFiltered(loader, page, maxPages = 5) {
+  const items = []
+  let p = page
+  let r
+  for (let i = 0; i < maxPages; i++, p++) {
+    r = await loader(p)
+    items.push(...r.items.filter(passLang))
+    if (items.length || !r.hasMore) break
+  }
+  return { items, hasMore: r.hasMore, last: Math.min(p, page + maxPages - 1) }
+}
+
+// ---------- 卡片與列表 ----------
+
+function card(item) {
+  return h(
+    'div',
+    { class: 'card', title: item.title, onclick: () => openDetail(item) },
+    h('div', { class: 'thumb' }, h('img', { src: item.cover, loading: 'lazy', alt: '', onerror: (e) => (e.target.style.visibility = 'hidden') }), badge(item.site), langBadge(item.lang)),
+    h('div', { class: 'title' }, item.title),
+    h('div', { class: 'sub' }, item.sub || ''),
+  )
+}
+
+const status = (msg, error) => h('div', { class: `status${error ? ' error' : ''}` }, msg)
+const loading = () => h('div', { class: 'status' }, h('span', { class: 'spinner' }), ' 載入中…')
+
+/** 分頁網格：loader(page) 回傳 { items, hasMore } */
+function pagedGrid(loader, { empty = '沒有結果' } = {}) {
+  const wrap = h('div')
+  const grid = h('div', { class: 'grid' })
+  const foot = h('div')
+  wrap.append(grid, foot)
+  let page = 0
+  let busy = false
+  const seen = new Set()
+  async function next() {
+    if (busy) return
+    busy = true
+    foot.replaceChildren(loading())
+    try {
+      const r = await loadFiltered(loader, page + 1)
+      page = r.last
+      for (const it of r.items) {
+        const key = it.site + it.id
+        if (seen.has(key)) continue
+        seen.add(key)
+        grid.append(card(it))
+      }
+      foot.replaceChildren()
+      if (!grid.children.length) foot.append(status(empty))
+      else if (r.hasMore) foot.append(h('button', { class: 'load-more', onclick: next }, '載入更多'))
+    } catch (e) {
+      foot.replaceChildren(status(e.message, true), h('button', { class: 'load-more', onclick: next }, '重試'))
+    }
+    busy = false
+  }
+  next()
+  return wrap
+}
+
+function subtabs(options, active, onPick) {
+  const bar = h('div', { class: 'subtabs' })
+  for (const [key, label] of options) {
+    bar.append(
+      h(
+        'button',
+        {
+          class: key === active ? 'active' : '',
+          onclick: () => {
+            for (const b of bar.children) b.classList.remove('active')
+            bar.querySelector(`[data-k="${key}"]`).classList.add('active')
+            onPick(key)
+          },
+          'data-k': key,
+        },
+        label,
+      ),
+    )
+  }
+  return bar
+}
+
+// ---------- 頁面 ----------
+
+let currentNav = 'home'
+let lastSearch = null
+function setNav(nav) {
+  currentNav = nav
+  for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.nav === nav)
+}
+
+const pages = {
+  home(site = store.get('homeSite', 'all')) {
+    setNav('home')
+    store.set('homeSite', site)
+    const body = h('div')
+    const tabs = subtabs([['all', '全部'], ...SITE_KEYS.map((k) => [k, SITES[k].label])], site, (k) => pages.home(k))
+    view.replaceChildren(tabs, body)
+    if (site === 'all') {
+      for (const k of SITE_KEYS) {
+        const row = h('div', { class: 'row' }, loading())
+        body.append(
+          h(
+            'div',
+            { class: 'section' },
+            h('div', { class: 'section-head' }, badge(k, true), h('h2', {}, '最新更新'), h('button', { class: 'more', onclick: () => pages.home(k) }, '看更多 →')),
+            row,
+          ),
+        )
+        loadFiltered((p) => SITES[k].latest(p), 1)
+          .then((r) => row.replaceChildren(...(r.items.length ? r.items.slice(0, 24).map(card) : [status(`沒有${LANGS[lang]}的作品`)])))
+          .catch((e) => row.replaceChildren(status(`${e.message}`, true)))
+      }
+      return
+    }
+    const s = SITES[site]
+    const grid = h('div')
+    const sortKey = `sort_${site}`
+    const show = (sort) => {
+      store.set(sortKey, sort)
+      grid.replaceChildren(pagedGrid((p) => s.latest(p, sort)))
+    }
+    const sort = store.get(sortKey, s.sorts[0][0])
+    if (s.sorts.length > 1) body.append(subtabs(s.sorts, sort, show))
+    body.append(grid)
+    show(sort)
+  },
+
+  search(q, sites, { keyword = false } = {}) {
+    setNav('search')
+    lastSearch = [q, sites, { keyword }]
+    // 輸入編號（或作品網址）時直接開那一本，不做關鍵字搜尋
+    const byId = keyword ? null : parseIdQuery(q)
+    const useSites = byId ? (byId.sites.length === 1 ? byId.sites : byId.sites.filter((k) => sites.includes(k))) : sites
+    const state = SITE_KEYS.filter((k) => useSites.includes(k)).map((k) => ({ site: k, items: [], page: 0, hasMore: true, error: '', busy: false }))
+    let filter = 'all'
+    const head = h(
+      'div',
+      { class: 'section-head' },
+      h('h2', {}, byId ? `編號 ${byId.id} 的作品` : `「${q}」的搜尋結果`),
+      byId && byId.plain ? h('button', { class: 'more', onclick: () => pages.search(q, sites, { keyword: true }) }, `改用關鍵字搜尋「${q}」`) : null,
+    )
+    const tabs = h('div', { class: 'subtabs' })
+    const grid = h('div', { class: 'grid' })
+    const foot = h('div')
+    view.replaceChildren(head, tabs, grid, foot)
+
+    const renderTabs = () => {
+      const opts = [['all', '全部', state.reduce((n, s) => n + s.items.length, 0)], ...state.map((s) => [s.site, SITES[s.site].label, s.items.length])]
+      tabs.replaceChildren(
+        ...opts.map(([k, label, n]) => {
+          const st = state.find((s) => s.site === k)
+          const extra = st?.busy ? '…' : st?.error ? '!' : n
+          return h(
+            'button',
+            {
+              class: filter === k ? 'active' : '',
+              onclick: () => {
+                filter = k
+                render()
+              },
+            },
+            label,
+            h('span', { class: 'count' }, String(extra)),
+          )
+        }),
+      )
+    }
+    const render = () => {
+      renderTabs()
+      const shown = filter === 'all' ? state : state.filter((s) => s.site === filter)
+      // 「全部」時把三站結果交錯排，才不會一站洗版
+      const lists = shown.map((s) => s.items)
+      const merged = []
+      for (let i = 0; lists.some((l) => i < l.length); i++) for (const l of lists) if (i < l.length) merged.push(l[i])
+      grid.replaceChildren(...merged.map(card))
+      foot.replaceChildren()
+      for (const s of shown) if (s.error) foot.append(status(`${SITES[s.site].label}：${s.error}`, true))
+      if (shown.some((s) => s.busy)) foot.append(loading())
+      else if (shown.some((s) => s.hasMore && !s.error)) foot.append(h('button', { class: 'load-more', onclick: () => more(shown) }, '載入更多'))
+      else if (!merged.length) foot.append(status('沒有結果'))
+    }
+    const more = (list) => {
+      for (const s of list) {
+        if (s.busy || !s.hasMore) continue
+        s.busy = true
+        s.error = ''
+        // 指定編號時不管語言篩選，一定顯示
+        const job = byId
+          ? SITES[s.site]
+              .detail(byId.id)
+              .then((d) => ({ items: [{ site: d.site, id: d.id, title: d.title, cover: d.cover, lang: d.lang, sub: d.pages ? `${d.pages} 頁` : '' }], hasMore: false, last: 1 }))
+          : loadFiltered((p) => SITES[s.site].search(q, p), s.page + 1)
+        job
+          .then((r) => {
+            s.page = r.last
+            const seen = new Set(s.items.map((x) => x.id))
+            s.items.push(...r.items.filter((x) => !seen.has(x.id)))
+            s.hasMore = r.hasMore
+          })
+          .catch((e) => {
+            s.error = byId && /找不到|404/.test(e.message) ? '沒有這個編號' : e.message
+            if (byId) s.hasMore = false
+          })
+          .finally(() => {
+            s.busy = false
+            if (currentNav === 'search') render()
+          })
+      }
+      render()
+    }
+    more(state)
+  },
+
+  favorites(site = store.get('favSite', 'nh')) {
+    setNav('favorites')
+    store.set('favSite', site)
+    const body = h('div', {}, loading())
+    view.replaceChildren(
+      subtabs(SITE_KEYS.map((k) => [k, SITES[k].label]), site, (k) => pages.favorites(k)),
+      body,
+    )
+    window.hub.authStatus(site).then((st) => {
+      if (currentNav !== 'favorites') return
+      if (!st.loggedIn) {
+        body.replaceChildren(
+          status(st.error ? `無法確認登入狀態：${st.error}` : `還沒登入${SITES[site].label}，登入後就能看到網站上的收藏`),
+          h('div', { style: 'text-align:center' }, h('button', { class: 'btn primary', onclick: () => doLogin(site).then(() => pages.favorites(site)) }, `登入 ${SITES[site].label}`)),
+        )
+        return
+      }
+      if (site === 'jm') SITES.jm.username = st.name
+      body.replaceChildren(pagedGrid((p) => SITES[site].favorites(p), { empty: '收藏是空的' }))
+    })
+  },
+
+  history() {
+    setNav('history')
+    const list = store.get('history', []).filter(passLang)
+    const grid = h('div', { class: 'grid' }, ...list.map(card))
+    view.replaceChildren(
+      h(
+        'div',
+        { class: 'section-head' },
+        h('h2', {}, '最近看過'),
+        list.length
+          ? h(
+              'button',
+              {
+                class: 'more',
+                onclick: () => {
+                  if (confirm('清除全部紀錄？')) {
+                    store.set('history', [])
+                    pages.history()
+                  }
+                },
+              },
+              '清除紀錄',
+            )
+          : null,
+      ),
+      list.length ? grid : status('還沒有看過任何作品'),
+    )
+  },
+
+  downloads() {
+    setNav('downloads')
+    const dirEl = h('span', { class: 'dl-dir' }, '')
+    window.hub.dl.dir().then((p) => (dirEl.textContent = p))
+    const list = h('div', { class: 'dl-list' })
+    const statusText = (j) =>
+      ({
+        queued: '等待中',
+        running: j.total ? `下載中 ${j.done} / ${j.total}` : '準備中…',
+        done: '完成',
+        error: `失敗：${j.error}`,
+        canceled: '已取消',
+      })[j.status]
+    const render = () => {
+      if (currentNav !== 'downloads') return off()
+      const jobs = dl.allJobs()
+      if (!jobs.length) return list.replaceChildren(status('還沒有下載任何作品。在作品頁按「下載 CBZ」就會出現在這裡'))
+      list.replaceChildren(
+        ...jobs.map((j) => {
+          const pct = j.status === 'done' ? 100 : j.total ? Math.round((j.done / j.total) * 100) : 0
+          const btns = []
+          if (j.status === 'queued' || j.status === 'running') btns.push(h('button', { class: 'btn', onclick: () => dl.cancel(j.key) }, '取消'))
+          if ((j.status === 'error' || j.status === 'canceled') && j.d) btns.push(h('button', { class: 'btn', onclick: () => dl.retry(j.key) }, '重試'))
+          if (j.status === 'done' && j.file) btns.push(h('button', { class: 'btn', onclick: () => window.hub.dl.show(j.file) }, '在資料夾顯示'))
+          return h(
+            'div',
+            { class: `dl-item ${j.status}` },
+            h('img', { src: j.cover || '', alt: '', onclick: () => openDetail({ site: j.site, id: j.id, title: j.title, cover: j.cover }) }),
+            h(
+              'div',
+              { class: 'dl-body' },
+              h('div', { class: 'dl-title' }, badge(j.site, true), ' ', j.title, j.chapterTitle ? h('span', { class: 'dl-ch' }, `　${j.chapterTitle}`) : null),
+              h('div', { class: 'dl-bar' }, h('div', { style: `width:${pct}%` })),
+              h('div', { class: 'dl-st' }, statusText(j)),
+            ),
+            h('div', { class: 'dl-btns' }, btns),
+          )
+        }),
+      )
+    }
+    const off = dl.onChange(render)
+    view.replaceChildren(
+      h('div', { class: 'section-head' }, h('h2', {}, '下載'), h('button', { class: 'more', onclick: () => dl.clearFinished() }, '清除已完成')),
+      h(
+        'div',
+        { class: 'dl-head' },
+        '儲存位置：',
+        dirEl,
+        h('button', { class: 'btn', onclick: () => window.hub.dl.openDir() }, '開啟資料夾'),
+        h('button', { class: 'btn', onclick: async () => (dirEl.textContent = await window.hub.dl.chooseDir()) }, '變更位置'),
+      ),
+      list,
+    )
+    render()
+  },
+
+  account() {
+    setNav('account')
+    const cfg = getConfig()
+    const cards = SITE_KEYS.map((k) => {
+      const st = h('div', { class: 'st' }, h('span', { class: 'spinner' }), ' 確認中…')
+      const btns = h('div', { class: 'row2' })
+      const input = h('input', { value: cfg.sites[k].base, spellcheck: 'false' })
+      const refresh = async () => {
+        st.className = 'st'
+        st.replaceChildren(h('span', { class: 'spinner' }), ' 確認中…')
+        btns.replaceChildren()
+        const s = await window.hub.authStatus(k)
+        if (s.loggedIn) {
+          st.className = 'st ok'
+          st.textContent = `已登入${s.name ? `：${s.name}` : ''}`
+          btns.append(
+            h('button', { class: 'btn', onclick: () => pages.favorites(k) }, '看收藏'),
+            h('button', { class: 'btn', onclick: () => window.hub.openSite(k, cfg.sites[k].base + '/') }, '開啟網站'),
+            h(
+              'button',
+              {
+                class: 'btn',
+                onclick: async () => {
+                  if (!confirm(`登出 ${SITES[k].label}？`)) return
+                  await window.hub.logout(k)
+                  refresh()
+                },
+              },
+              '登出',
+            ),
+          )
+        } else {
+          st.textContent = s.error ? `未登入（${s.error}）` : '未登入'
+          btns.append(
+            h('button', { class: 'btn primary', onclick: () => doLogin(k).then(refresh) }, '登入'),
+            h('button', { class: 'btn', onclick: () => window.hub.openSite(k, cfg.sites[k].base + '/') }, '開啟網站'),
+          )
+        }
+      }
+      refresh()
+      return h(
+        'div',
+        { class: 'account', 'data-site': k },
+        h('h3', {}, badge(k, true), SITES[k].label),
+        st,
+        btns,
+        h('label', {}, '網址（網站換網域時改這裡）'),
+        h(
+          'div',
+          { class: 'domain' },
+          input,
+          h(
+            'button',
+            {
+              class: 'btn',
+              onclick: async () => {
+                const r = await window.hub.setBase(k, input.value)
+                if (!r.ok) return toast(r.error)
+                await loadConfig()
+                input.value = getConfig().sites[k].base
+                toast('已儲存')
+                refresh()
+              },
+            },
+            '儲存',
+          ),
+        ),
+      )
+    })
+    view.replaceChildren(
+      h('div', { class: 'section-head' }, h('h2', {}, '帳號')),
+      h('div', { class: 'accounts' }, ...cards),
+      h(
+        'div',
+        { class: 'hint' },
+        '按「登入」會開啟該網站自己的登入頁，帳號密碼直接在網站上輸入，本程式不會經手。',
+        h('br'),
+        '登入成功後關掉那個視窗即可，登入狀態會保存在本機，下次開程式不用重登。三個站的登入互相獨立。',
+      ),
+    )
+  },
+}
+
+/**
+ * 判斷搜尋字是不是編號：
+ *   站別代號、站名、各站編號前綴＋編號（例如 JM123、#123）→ 只查那一站
+ *   作品網址 → 依網址判斷是哪一站
+ *   純數字 → 每個勾選的站都用這個編號查一次
+ */
+function parseIdQuery(q) {
+  const s = q.trim()
+  const t = s.replace(/\s+/g, '')
+  const one = (site, id) => ({ sites: [site], id: String(Number(id)) })
+  const cfg = getConfig().sites
+  const hostName = (k) => new URL(cfg[k].base).hostname.split('.').slice(-2)[0]
+  const reEsc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  let m
+  if ((m = s.match(/\/g\/(\d+)/)) && s.includes(hostName('nh'))) return one('nh', m[1])
+  if ((m = s.match(/\/(?:album|photo)\/(\d+)/))) return one('jm', m[1])
+  if ((m = s.match(/aid-(\d+)/))) return one('wn', m[1])
+  for (const k of SITE_KEYS) {
+    const c = cfg[k]
+    const names = [k, c.prefix, c.label, c.label.slice(0, 2), hostName(k)].filter(Boolean).map(reEsc)
+    if ((m = t.match(new RegExp(`^(?:${names.join('|')})(\\d+)$`, 'i')))) return one(k, m[1])
+  }
+  if ((m = t.match(/^\d{1,8}$/))) return { sites: SITE_KEYS, id: String(Number(m[0])), plain: true }
+  return null
+}
+
+async function doLogin(site) {
+  toast(`在新視窗登入 ${SITES[site].label}，完成後關閉視窗`)
+  const s = await window.hub.login(site)
+  if (site === 'jm') SITES.jm.username = s.name || ''
+  toast(s.loggedIn ? `${SITES[site].label} 已登入${s.name ? `：${s.name}` : ''}` : `${SITES[site].label} 尚未登入`)
+  return s
+}
+
+// ---------- 詳情 ----------
+
+const detailEl = $('#detail')
+let detailToken = 0
+
+async function openDetail(item) {
+  const token = ++detailToken
+  const box = h('div', { class: 'detail-box' })
+  const close = h('button', { class: 'close', onclick: closeDetail, title: '關閉 (Esc)' }, '×')
+  box.append(
+    close,
+    h(
+      'div',
+      { class: 'detail-main' },
+      h('div', { class: 'cover' }, h('img', { src: item.cover, alt: '' })),
+      h('div', { class: 'meta' }, badge(item.site, true), h('h1', {}, item.title), loading()),
+    ),
+  )
+  detailEl.replaceChildren(box)
+  detailEl.classList.remove('hidden')
+  detailEl.scrollTop = 0
+  let d
+  try {
+    d = await SITES[item.site].detail(item.id)
+  } catch (e) {
+    if (token !== detailToken) return
+    box.querySelector('.meta').lastChild.replaceWith(
+      status(e.message, true),
+      h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => openDetail(item) }, '重試')),
+    )
+    return
+  }
+  if (token !== detailToken) return
+  if (!d.cover) d.cover = item.cover
+  addHistory({ ...item, title: d.title, cover: d.cover, lang: d.lang })
+  renderDetail(box, close, d)
+}
+
+function renderDetail(box, close, d) {
+  const groups = {}
+  for (const t of d.tags) (groups[t.label] ||= []).push(t)
+  const tagEls = Object.entries(groups).map(([k, list]) =>
+    h(
+      'div',
+      { class: 'tag-group' },
+      h('span', { class: 'k' }, k),
+      h(
+        'div',
+        { class: 'v' },
+        list.map((t) =>
+          h(
+            'button',
+            {
+              class: 'tag',
+              onclick: () => {
+                closeDetail()
+                $('#searchInput').value = t.query
+                pages.search(t.query, [d.site])
+              },
+            },
+            t.name,
+          ),
+        ),
+      ),
+    ),
+  )
+  const readKey = `read_${d.site}_${d.id}`
+  const readSet = new Set(store.get(readKey, []))
+  const actions = h('div', { class: 'actions' })
+  const startId = d.chapters.length ? d.chapters[0].id : null
+  actions.append(h('button', { class: 'btn primary', onclick: () => openReader(d, startId) }, d.chapters.length ? '從第一話開始' : '開始閱讀'))
+  if (d.site === 'nh') {
+    const fav = h('button', { class: 'btn', disabled: true }, '收藏')
+    actions.append(fav)
+    SITES.nh
+      .isFavorite(d.id)
+      .then((on) => setFavBtn(fav, on, d.id))
+      .catch(() => {
+        fav.disabled = false
+        fav.textContent = '收藏（需登入）'
+        fav.onclick = () => doLogin('nh')
+      })
+  } else {
+    actions.append(h('button', { class: 'btn', onclick: () => window.hub.openSite(d.site, d.url), title: '用已登入的網站視窗開啟，可在網站上收藏或留言' }, '到網站收藏 / 開啟'))
+  }
+  actions.append(h('button', { class: 'btn', onclick: () => window.hub.external(d.url) }, '用瀏覽器開啟'))
+  if (d.chapters.length > 1) actions.append(h('button', { class: 'btn', onclick: () => download(d, d.chapters) }, `下載全部 ${d.chapters.length} 話 (CBZ)`))
+  else actions.append(h('button', { class: 'btn', onclick: () => download(d, [d.chapters[0] || null]) }, '下載 CBZ'))
+
+  const meta = h(
+    'div',
+    { class: 'meta' },
+    badge(d.site, true),
+    h('h1', {}, d.title),
+    d.subtitle ? h('div', { class: 'subtitle' }, d.subtitle) : null,
+    h('div', { class: 'info' }, d.lang ? h('span', {}, '語言', h('b', {}, LANGS[d.lang])) : null, d.info.map(([k, v]) => h('span', {}, k, h('b', {}, v)))),
+    tagEls,
+    actions,
+  )
+  const parts = [close, h('div', { class: 'detail-main' }, h('div', { class: 'cover' }, h('img', { src: d.cover, alt: '' })), meta)]
+  if (d.chapters.length > 1) {
+    parts.push(
+      h('h3', {}, `章節（${d.chapters.length}）`),
+      h(
+        'div',
+        { class: 'chapters' },
+        d.chapters.map((c, i) =>
+          h(
+            'div',
+            { class: 'chapter' },
+            h('button', { class: readSet.has(c.id) ? 'read' : '', title: c.title, onclick: () => openReader(d, c.id) }, c.title || `第 ${i + 1} 話`),
+            h('button', { class: 'dl', title: '下載這一話 (CBZ)', onclick: () => download(d, [c]) }, '⬇'),
+          ),
+        ),
+      ),
+    )
+  }
+  if (d.related?.length) parts.push(h('h3', {}, '相關作品'), h('div', { class: 'grid' }, d.related.map(card)))
+  box.replaceChildren(...parts)
+}
+
+/** 加進下載佇列；已經下載過的先問要不要重抓 */
+async function download(d, chapters) {
+  const list = []
+  for (const c of chapters) {
+    if (dl.isQueued(d, c?.id)) continue
+    if (await window.hub.dl.exists(dl.fileName(d, c))) {
+      if (!confirm(`「${dl.fileName(d, c)}」已經下載過了，要重新下載嗎？`)) continue
+    }
+    list.push(c)
+  }
+  for (const c of list) dl.enqueue(d, c)
+  if (list.length) toast(list.length > 1 ? `已加入下載：${list.length} 話` : '已加入下載')
+  else if (chapters.every((c) => dl.isQueued(d, c?.id))) toast('已經在下載佇列裡了')
+}
+
+function setFavBtn(btn, on, id) {
+  btn.disabled = false
+  btn.textContent = on ? '★ 已收藏' : '☆ 收藏'
+  btn.classList.toggle('fav-on', on)
+  btn.onclick = async () => {
+    btn.disabled = true
+    try {
+      await SITES.nh.setFavorite(id, !on)
+      setFavBtn(btn, !on, id)
+      toast(on ? '已取消收藏' : `已加入 ${SITES.nh.label} 收藏`)
+    } catch (e) {
+      btn.disabled = false
+      toast(e.message)
+    }
+  }
+}
+
+function closeDetail() {
+  detailToken++
+  detailEl.classList.add('hidden')
+  detailEl.replaceChildren()
+}
+
+// ---------- 閱讀器 ----------
+
+const readerEl = $('#reader')
+let readerToken = 0
+let observer = null
+
+async function openReader(d, chapterId) {
+  const token = ++readerToken
+  const chIndex = d.chapters.findIndex((c) => c.id === chapterId)
+  const chapter = chIndex >= 0 ? d.chapters[chIndex] : null
+  const width = store.get('pageWidth', 900)
+  readerEl.style.setProperty('--page-w', width + 'px')
+  const title = h('div', { class: 't' }, badge(d.site, true), ' ', d.title, chapter && d.chapters.length > 1 ? `　/　${chapter.title}` : '')
+  const counter = h('span', {}, '')
+  const setW = (dw) => {
+    const w = Math.max(400, Math.min(2000, store.get('pageWidth', 900) + dw))
+    store.set('pageWidth', w)
+    readerEl.style.setProperty('--page-w', w + 'px')
+  }
+  const bar = h(
+    'div',
+    { class: 'reader-bar' },
+    h('button', { onclick: closeReader }, '← 返回'),
+    title,
+    counter,
+    h('button', { onclick: () => download(d, [chapter || d.chapters[0] || null]), title: '下載成 CBZ' }, chapter && d.chapters.length > 1 ? '下載本話' : '下載'),
+    h('button', { onclick: () => setW(-100), title: '縮小 (-)' }, '－'),
+    h('button', { onclick: () => setW(100), title: '放大 (+)' }, '＋'),
+  )
+  const list = h('div', { class: 'pages' }, loading())
+  readerEl.replaceChildren(bar, list)
+  readerEl.classList.remove('hidden')
+  readerEl.scrollTop = 0
+  readerEl.focus()
+
+  if (chapter) {
+    const key = `read_${d.site}_${d.id}`
+    const set = new Set(store.get(key, []))
+    set.add(chapter.id)
+    store.set(key, [...set])
+    addHistory({ site: d.site, id: d.id, title: d.title, cover: d.cover, lang: d.lang }, chapter.title)
+  }
+
+  let imgs
+  try {
+    imgs = await SITES[d.site].read(d, chapterId)
+  } catch (e) {
+    if (token !== readerToken) return
+    list.replaceChildren(status(e.message, true), h('button', { class: 'load-more', onclick: () => openReader(d, chapterId) }, '重試'))
+    return
+  }
+  if (token !== readerToken) return
+  counter.textContent = `共 ${imgs.length} 頁`
+  observer?.disconnect()
+  observer = new IntersectionObserver(
+    (entries) => {
+      for (const en of entries) {
+        if (!en.isIntersecting) continue
+        observer.unobserve(en.target)
+        loadPage(en.target)
+      }
+    },
+    { root: readerEl, rootMargin: '1800px 0px' },
+  )
+  const els = imgs.map((p, i) => {
+    const el = h('div', { class: 'page', 'data-i': i }, `${i + 1}`)
+    el.page = p
+    observer.observe(el)
+    return el
+  })
+  const next = chIndex >= 0 && chIndex < d.chapters.length - 1 ? d.chapters[chIndex + 1] : null
+  const end = h(
+    'div',
+    { class: 'reader-end' },
+    next ? h('button', { class: 'btn primary', onclick: () => openReader(d, next.id) }, `下一話：${next.title}`) : '— 完 —',
+  )
+  list.replaceChildren(...els, end)
+
+  // 捲動時更新頁碼、讓上方列淡出
+  let lastY = 0
+  readerEl.onscroll = () => {
+    const y = readerEl.scrollTop
+    bar.classList.toggle('faded', y > lastY && y > 200)
+    lastY = y
+    const mid = y + readerEl.clientHeight / 2
+    let cur = 0
+    for (const el of els) {
+      if (el.offsetTop > mid) break
+      cur = Number(el.dataset.i)
+    }
+    counter.textContent = `${cur + 1} / ${imgs.length}`
+  }
+}
+
+function loadPage(el, retry = 0) {
+  const p = el.page
+  const img = new Image()
+  img.decoding = 'async'
+  img.onload = () => {
+    el.classList.add('loaded')
+    if (p.segs > 0) el.replaceChildren(descramble(img, p.segs))
+    else el.replaceChildren(img)
+  }
+  img.onerror = () => {
+    if (retry < 2) return setTimeout(() => loadPage(el, retry + 1), 1200)
+    el.replaceChildren(h('div', { class: 'err' }, `第 ${Number(el.dataset.i) + 1} 頁載入失敗 `, h('button', { class: 'btn', onclick: () => loadPage(el) }, '重試')))
+  }
+  img.src = p.url
+}
+
+/** jm 站的圖被橫切成 num 條上下倒置，照網站的演算法拼回來 */
+function descramble(img, num) {
+  const w = img.naturalWidth
+  const hgt = img.naturalHeight
+  const c = document.createElement('canvas')
+  c.width = w
+  c.height = hgt
+  const ctx = c.getContext('2d')
+  const over = hgt % num
+  const base = Math.floor(hgt / num)
+  for (let i = 0; i < num; i++) {
+    let move = base
+    const ySrc = hgt - base * (i + 1) - over
+    let yDst = base * i
+    if (i === 0) move += over
+    else yDst += over
+    ctx.drawImage(img, 0, ySrc, w, move, 0, yDst, w, move)
+  }
+  return c
+}
+
+function closeReader() {
+  readerToken++
+  observer?.disconnect()
+  readerEl.onscroll = null
+  readerEl.classList.add('hidden')
+  readerEl.replaceChildren()
+}
+
+// ---------- 全域 ----------
+
+/** 上方的語言切換：全部／中文／English／日本語，切換後重新載入目前頁面 */
+function setupLang() {
+  const box = $('#langToggles')
+  const opts = [['', '全部語言'], ...Object.entries(LANGS)]
+  const render = () =>
+    box.replaceChildren(
+      ...opts.map(([k, label]) =>
+        h(
+          'button',
+          {
+            type: 'button',
+            class: `lang-btn${lang === k ? ' on' : ''}`,
+            'data-lang': k,
+            onclick: () => {
+              if (lang === k) return
+              lang = k
+              setLangFilter(k)
+              store.set('lang', k)
+              render()
+              if (currentNav === 'search' && lastSearch) pages.search(...lastSearch)
+              else if (['home', 'favorites', 'history'].includes(currentNav)) pages[currentNav]()
+            },
+          },
+          label,
+        ),
+      ),
+    )
+  render()
+}
+
+// ---------- 程式內更新 ----------
+
+const REPO = 'DLIN131/ComicHub'
+const ZIP_NAME = 'ComicHub-Windows.zip'
+
+/** version.js 由 CI 寫入（APP_VERSION = run_number），本機開發是 0，不檢查 */
+async function checkUpdate() {
+  const current = Number(window.APP_VERSION) || 0
+  if (!current) return
+  try {
+    const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
+    if (!res.ok) return
+    const r = await res.json()
+    const code = Number(String(r.tag_name || '').split('.').pop()) || 0
+    const asset = (r.assets || []).find((a) => a.name === ZIP_NAME)
+    if (code <= current || !asset || store.get('skippedVersion', 0) === code) return
+    // 發布說明裡 --- 以下是固定的下載資訊，Co-Authored-By 也不用給使用者看
+    const notes = String(r.body || '')
+      .split('\n---')[0]
+      .split('\n')
+      .filter((l) => !l.startsWith('Co-Authored-By'))
+      .join('\n')
+      .trim()
+    const st = h('div', { class: 'status' })
+    const primary = h('button', { class: 'btn primary' }, '立即更新')
+    const skip = h('button', { class: 'btn' }, '略過這個版本')
+    const later = h('button', { class: 'btn' }, '稍後')
+    const bar = h(
+      'div',
+      { class: 'update-bar' },
+      h('div', {}, h('b', {}, `發現新版本 v1.0.${code}`), `（目前 v1.0.${current}）`, h('div', { class: 'notes' }, notes), st),
+      primary,
+      skip,
+      later,
+    )
+    const inApp = window.updater && (await window.updater.supported().catch(() => false))
+    let busy = false
+    primary.onclick = async () => {
+      // 不是打包版（例如開發時）就退回用瀏覽器下載
+      if (!inApp) {
+        window.hub.external(asset.browser_download_url)
+        return bar.remove()
+      }
+      if (busy) return
+      if (dl.activeCount() && !confirm('還有作品在下載，更新會中斷下載。要繼續嗎？')) return
+      busy = true
+      primary.textContent = '下載中…'
+      skip.disabled = later.disabled = true
+      try {
+        await window.updater.download(asset.browser_download_url, (p) => {
+          st.textContent = p >= 0 ? `下載中 ${p}%` : '下載中…'
+          if (p >= 100) st.textContent = '解壓縮中…'
+        })
+        st.textContent = '下載完成，程式會關閉並自動重新開啟'
+        primary.textContent = '安裝中…'
+        await window.updater.install()
+      } catch (err) {
+        busy = false
+        primary.textContent = '重試'
+        skip.disabled = later.disabled = false
+        st.textContent = `更新失敗：${String(err.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`
+      }
+    }
+    skip.onclick = () => {
+      store.set('skippedVersion', code)
+      bar.remove()
+    }
+    later.onclick = () => bar.remove()
+    document.body.append(bar)
+  } catch {}
+}
+
+function setupSearch() {
+  const cfg = getConfig().sites
+  $('#searchInput').placeholder = `關鍵字或編號（123、${cfg.jm.prefix}123、${cfg.wn.prefix}123）`
+  const enabled = new Set(store.get('searchSites', SITE_KEYS))
+  const box = $('#siteToggles')
+  for (const k of SITE_KEYS) {
+    const chip = h('button', { type: 'button', class: `chip${enabled.has(k) ? ' on' : ''}`, 'data-site': k, title: `搜尋時包含 ${SITES[k].label}` }, SITES[k].short)
+    chip.onclick = () => {
+      if (enabled.has(k)) {
+        if (enabled.size === 1) return toast('至少要選一個站')
+        enabled.delete(k)
+      } else enabled.add(k)
+      chip.classList.toggle('on', enabled.has(k))
+      store.set('searchSites', [...enabled])
+    }
+    box.append(chip)
+  }
+  $('#searchForm').onsubmit = (e) => {
+    e.preventDefault()
+    const q = $('#searchInput').value.trim()
+    if (!q) return
+    closeDetail()
+    closeReader()
+    pages.search(q, [...enabled])
+  }
+}
+
+document.addEventListener('click', (e) => {
+  const nav = e.target.closest('[data-nav]')
+  if (!nav) return
+  closeDetail()
+  closeReader()
+  pages[nav.dataset.nav]()
+})
+
+detailEl.addEventListener('click', (e) => {
+  if (e.target === detailEl) closeDetail()
+})
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return
+  if (!readerEl.classList.contains('hidden')) {
+    if (e.key === 'Escape' || e.key === 'Backspace') closeReader()
+    else if (e.key === '+' || e.key === '=') readerEl.querySelector('.reader-bar button[title^="放大"]').click()
+    else if (e.key === '-') readerEl.querySelector('.reader-bar button[title^="縮小"]').click()
+    else if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') {
+      e.preventDefault()
+      readerEl.scrollBy({ top: readerEl.clientHeight * 0.9, behavior: 'smooth' })
+    } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+      e.preventDefault()
+      readerEl.scrollBy({ top: -readerEl.clientHeight * 0.9, behavior: 'smooth' })
+    }
+    return
+  }
+  if (e.key === 'Escape' && !detailEl.classList.contains('hidden')) closeDetail()
+})
+
+function updateDlCount() {
+  const n = dl.activeCount()
+  const el = $('#dlCount')
+  el.textContent = n
+  el.classList.toggle('hidden', !n)
+}
+dl.onChange(updateDlCount)
+
+loadConfig().then(() => {
+  setupLang()
+  setupSearch()
+  checkUpdate()
+  pages.home()
+})
+
+// 測試用
+window.__app = { pages, openDetail, openReader, SITES, dl }

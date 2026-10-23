@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src * data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src https://api.github.com" />
+    <title>ComicHub</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand" data-nav="home">Comic<span>Hub</span></div>
+      <nav class="tabs">
+        <button data-nav="home" class="active">首頁</button>
+        <button data-nav="favorites">收藏</button>
+        <button data-nav="history">紀錄</button>
+        <button data-nav="downloads">下載<span id="dlCount" class="dl-count hidden"></span></button>
+        <button data-nav="account">帳號</button>
+      </nav>
+      <div class="lang-toggles" id="langToggles"></div>
+      <form class="search" id="searchForm">
+        <div class="site-toggles" id="siteToggles"></div>
+        <input id="searchInput" type="search" placeholder="關鍵字或編號" autocomplete="off" />
+        <button type="submit">搜尋</button>
+      </form>
+    </header>
+    <main id="view"></main>
+
+    <div id="detail" class="overlay hidden"></div>
+    <div id="reader" class="reader hidden"></div>
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="version.js"></script>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

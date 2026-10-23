@@ -1,0 +1,45 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+
+      - name: Build Windows app
+        shell: pwsh
+        run: |
+          "window.APP_VERSION = ${{ github.run_number }}" | Set-Content -Encoding utf8 src/version.js
+          npm ci --no-audit --no-fund
+          npm version "1.0.${{ github.run_number }}" --no-git-tag-version
+          $env:APP_VERSION = "1.0.${{ github.run_number }}"
+          node pack.js dist
+          New-Item -ItemType Directory -Force out | Out-Null
+          Compress-Archive -Path dist/ComicHub-win32-x64/* -DestinationPath out/ComicHub-Windows.zip
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: ComicHub v1.0.${{ github.run_number }}
+          make_latest: true
+          files: out/ComicHub-Windows.zip
+          body: |
+            ${{ github.event.head_commit.message }}
+
+            ---
+            固定下載網址（永遠是最新版）：https://github.com/${{ github.repository }}/releases/latest/download/ComicHub-Windows.zip
