@@ -834,7 +834,10 @@ function searchPanel(candidates, onGo) {
     $('#searchInput').value = q
     pages.search(q, store.get('searchSites', SITE_KEYS), { keyword: true })
   }
-  input.onkeydown = (e) => e.key === 'Enter' && go()
+  // 不能寫成 `(e) => e.key === 'Enter' && go()`：on 事件回傳 false 等於取消按鍵，其他字都打不進去
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') go()
+  }
   return h(
     'div',
     { class: 'search-panel' },
@@ -913,7 +916,9 @@ function bookPopup(b, reload) {
     reload()
     bookPopup({ ...b }, reload)
   }
-  newName.onkeydown = (e) => e.key === 'Enter' && addGroup()
+  newName.onkeydown = (e) => {
+    if (e.key === 'Enter') addGroup()
+  }
 
   const actions = h('div', { class: 'actions' })
   if (!b.error) actions.append(h('button', { class: 'btn primary', onclick: () => openLocal(b) }, '開始閱讀'))
