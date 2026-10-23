@@ -219,7 +219,9 @@ async function get(site, url, opts = {}) {
     }
     return { ok: true, status: r.status, data: opts.json ? JSON.parse(r.text || 'null') : r.text, url: r.url }
   } catch (e) {
-    return { ok: false, status: 0, error: e.message || String(e) }
+    const msg = e.message || String(e)
+    // 斷網、DNS 失敗、網站被擋都是 net::ERR_ 開頭，給看得懂的說明
+    return { ok: false, status: 0, error: /net::ERR_/.test(msg) ? `連不上網站（網路中斷或網站被擋，${msg.replace(/^.*net::/, '')}）` : msg }
   }
 }
 

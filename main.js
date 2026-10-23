@@ -3,6 +3,7 @@ const path = require('path')
 const fetcher = require('./fetcher')
 const downloads = require('./downloads')
 const updater = require('./updater')
+const library = require('./library')
 
 // 各站共用一般 Chrome 的 UA，Cloudflare 對 Electron 字樣的 UA 比較容易擋
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
@@ -98,6 +99,7 @@ app.whenReady().then(() => {
   setupIpc()
   downloads.setup()
   updater.setup()
+  library.setup(downloads.dir)
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

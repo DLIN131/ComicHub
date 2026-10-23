@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
   <head>
     <meta charset="utf-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src * data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src https://api.github.com" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src * data: blob: cbz:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src https://api.github.com" />
     <title>ComicHub</title>
     <link rel="stylesheet" href="style.css" />
   </head>
@@ -13,6 +13,7 @@
         <button data-nav="home" class="active">首頁</button>
         <button data-nav="favorites">收藏</button>
         <button data-nav="history">紀錄</button>
+        <button data-nav="library">書櫃</button>
         <button data-nav="downloads">下載<span id="dlCount" class="dl-count hidden"></span></button>
         <button data-nav="account">帳號</button>
       </nav>

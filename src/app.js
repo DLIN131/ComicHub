@@ -161,6 +161,7 @@ const pages = {
     const tabs = subtabs([['all', '全部'], ...SITE_KEYS.map((k) => [k, SITES[k].label])], site, (k) => pages.home(k))
     view.replaceChildren(tabs, body)
     if (site === 'all') {
+      let failed = 0
       for (const k of SITE_KEYS) {
         const row = h('div', { class: 'row' }, loading())
         body.append(
@@ -173,7 +174,11 @@ const pages = {
         )
         loadFiltered((p) => SITES[k].latest(p), 1)
           .then((r) => row.replaceChildren(...(r.items.length ? r.items.slice(0, 24).map(card) : [status(`沒有${LANGS[lang]}的作品`)])))
-          .catch((e) => row.replaceChildren(status(`${e.message}`, true)))
+          .catch((e) => {
+            row.replaceChildren(status(`${e.message}`, true))
+            if (++failed === SITE_KEYS.length && currentNav === 'home')
+              body.prepend(h('div', { class: 'offline-hint' }, '目前連不上網站。已下載的漫畫可以在「書櫃」離線閱讀 ', h('button', { class: 'btn primary', onclick: () => pages.library() }, '前往書櫃')))
+          })
       }
       return
     }
@@ -327,6 +332,54 @@ const pages = {
     )
   },
 
+  library() {
+    setNav('library')
+    const grid = h('div', { class: 'grid' })
+    const body = h('div', {}, loading())
+    const load = async () => {
+      body.replaceChildren(loading())
+      const books = await window.hub.lib.list()
+      if (currentNav !== 'library') return
+      const all = [...openedBooks.filter((b) => !books.some((x) => x.id === b.id)), ...books].filter((b) => passLang(localLang(b)))
+      if (!all.length) {
+        body.replaceChildren(status(lang ? `下載資料夾裡沒有${LANGS[lang]}的漫畫` : '下載資料夾裡還沒有漫畫。在作品頁按「下載 CBZ」，或用「開啟漫畫檔」讀其他 CBZ'))
+        return
+      }
+      grid.replaceChildren(...all.map((b) => localCard(b, load)))
+      body.replaceChildren(grid)
+    }
+    view.replaceChildren(
+      h(
+        'div',
+        { class: 'section-head' },
+        h('h2', {}, '書櫃（離線閱讀）'),
+        h('div', { class: 'head-btns' },
+        h('button', { class: 'more', onclick: load }, '重新整理'),
+        h(
+          'button',
+          {
+            class: 'more',
+            onclick: async () => {
+              const picked = await window.hub.lib.pick()
+              for (const b of picked) {
+                if (b.error) toast(b.error)
+                else if (!openedBooks.some((x) => x.id === b.id)) openedBooks.unshift(b)
+              }
+              const ok = picked.filter((b) => !b.error)
+              if (ok.length === 1) openLocal(ok[0])
+              load()
+            },
+          },
+          '開啟漫畫檔…',
+        ),
+        h('button', { class: 'more', onclick: () => window.hub.dl.openDir() }, '開啟資料夾'),
+        ),
+      ),
+      body,
+    )
+    load()
+  },
+
   downloads() {
     setNav('downloads')
     const dirEl = h('span', { class: 'dl-dir' }, '')
@@ -350,7 +403,10 @@ const pages = {
           const btns = []
           if (j.status === 'queued' || j.status === 'running') btns.push(h('button', { class: 'btn', onclick: () => dl.cancel(j.key) }, '取消'))
           if ((j.status === 'error' || j.status === 'canceled') && j.d) btns.push(h('button', { class: 'btn', onclick: () => dl.retry(j.key) }, '重試'))
-          if (j.status === 'done' && j.file) btns.push(h('button', { class: 'btn', onclick: () => window.hub.dl.show(j.file) }, '在資料夾顯示'))
+          if (j.status === 'done' && j.file) {
+            btns.push(h('button', { class: 'btn primary', onclick: () => openLocalFile(j.file) }, '閱讀'))
+            btns.push(h('button', { class: 'btn', onclick: () => window.hub.dl.show(j.file) }, '在資料夾顯示'))
+          }
           return h(
             'div',
             { class: `dl-item ${j.status}` },
@@ -636,6 +692,69 @@ async function download(d, chapters) {
   else if (chapters.every((c) => dl.isQueued(d, c?.id))) toast('已經在下載佇列裡了')
 }
 
+// ---------- 本機書櫃 ----------
+
+/** 這次用「開啟漫畫檔」開過、但不在下載資料夾裡的檔案 */
+const openedBooks = []
+
+/** 檔名開頭的 [站名] 對回站別代號 */
+const siteOfLocal = (b) => SITE_KEYS.find((k) => SITES[k].label === b.source) || ''
+
+/** 本機檔的語言：書名裡的 [中国翻訳]、[English] 之類，或 ComicInfo 的標籤 */
+function localLang(b) {
+  const t = `${b.title} ${b.name}`
+  if (/chinese|中文|漢化|汉化|中国翻訳|中國翻譯|翻譯|翻译/i.test(t)) return { lang: 'zh' }
+  if (/english|英訳/i.test(t)) return { lang: 'en' }
+  if (/japanese|日文|日語/i.test(t)) return { lang: 'ja' }
+  return { lang: '' }
+}
+
+function localCard(b, reload) {
+  const site = siteOfLocal(b)
+  const del = h('button', {
+    class: 'card-del',
+    title: '刪除（移到資源回收筒）',
+    onclick: async (e) => {
+      e.stopPropagation()
+      if (!confirm(`刪除「${b.name}」？檔案會移到資源回收筒。`)) return
+      const r = await window.hub.lib.trash(b.file)
+      if (!r.ok) return toast(r.error)
+      const i = openedBooks.findIndex((x) => x.id === b.id)
+      if (i >= 0) openedBooks.splice(i, 1)
+      reload()
+    },
+  }, '✕')
+  return h(
+    'div',
+    { class: 'card', title: b.name, onclick: () => openLocal(b) },
+    h(
+      'div',
+      { class: 'thumb' },
+      h('img', { src: b.cover, loading: 'lazy', alt: '', onerror: (e) => (e.target.style.visibility = 'hidden') }),
+      site ? badge(site) : h('span', { class: 'badge local' }, b.source || '本機'),
+      langBadge(localLang(b).lang),
+      del,
+    ),
+    h('div', { class: 'title' }, b.title),
+    h('div', { class: 'sub' }, [b.chapter, `${b.pageCount} 頁`].filter(Boolean).join('・')),
+  )
+}
+
+function openLocal(b) {
+  if (!b.pageCount) return toast('這個檔案裡沒有圖片')
+  closeDetail()
+  openReader(
+    { site: siteOfLocal(b) || 'local', id: b.id, title: b.title, subtitle: b.chapter, chapters: [], local: true, localPages: b.pages.map((url) => ({ url, segs: 0 })) },
+    null,
+  )
+}
+
+async function openLocalFile(file) {
+  const r = await window.hub.lib.open(file)
+  if (!r.ok) return toast(`打不開：${r.error}`)
+  openLocal(r.book)
+}
+
 function setFavBtn(btn, on, id) {
   btn.disabled = false
   btn.textContent = on ? '★ 已收藏' : '☆ 收藏'
@@ -671,7 +790,7 @@ async function openReader(d, chapterId) {
   const chapter = chIndex >= 0 ? d.chapters[chIndex] : null
   const width = store.get('pageWidth', 900)
   readerEl.style.setProperty('--page-w', width + 'px')
-  const title = h('div', { class: 't' }, badge(d.site, true), ' ', d.title, chapter && d.chapters.length > 1 ? `　/　${chapter.title}` : '')
+  const title = h('div', { class: 't' }, SITES[d.site] ? badge(d.site, true) : null, ' ', d.title, chapter && d.chapters.length > 1 ? `　/　${chapter.title}` : '', d.subtitle ? `　/　${d.subtitle}` : '')
   const counter = h('span', {}, '')
   const setW = (dw) => {
     const w = Math.max(400, Math.min(2000, store.get('pageWidth', 900) + dw))
@@ -684,7 +803,7 @@ async function openReader(d, chapterId) {
     h('button', { onclick: closeReader }, '← 返回'),
     title,
     counter,
-    h('button', { onclick: () => download(d, [chapter || d.chapters[0] || null]), title: '下載成 CBZ' }, chapter && d.chapters.length > 1 ? '下載本話' : '下載'),
+    d.local ? null : h('button', { onclick: () => download(d, [chapter || d.chapters[0] || null]), title: '下載成 CBZ' }, chapter && d.chapters.length > 1 ? '下載本話' : '下載'),
     h('button', { onclick: () => setW(-100), title: '縮小 (-)' }, '－'),
     h('button', { onclick: () => setW(100), title: '放大 (+)' }, '＋'),
   )
@@ -704,7 +823,7 @@ async function openReader(d, chapterId) {
 
   let imgs
   try {
-    imgs = await SITES[d.site].read(d, chapterId)
+    imgs = d.local ? d.localPages : await SITES[d.site].read(d, chapterId)
   } catch (e) {
     if (token !== readerToken) return
     list.replaceChildren(status(e.message, true), h('button', { class: 'load-more', onclick: () => openReader(d, chapterId) }, '重試'))
@@ -820,7 +939,7 @@ function setupLang() {
               store.set('lang', k)
               render()
               if (currentNav === 'search' && lastSearch) pages.search(...lastSearch)
-              else if (['home', 'favorites', 'history'].includes(currentNav)) pages[currentNav]()
+              else if (['home', 'favorites', 'history', 'library'].includes(currentNav)) pages[currentNav]()
             },
           },
           label,

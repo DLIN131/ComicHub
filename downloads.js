@@ -193,4 +193,4 @@ function setup() {
   })
 }
 
-module.exports = { setup }
+module.exports = { setup, dir }

@@ -33,4 +33,10 @@ contextBridge.exposeInMainWorld('hub', {
     finish: (id) => ipcRenderer.invoke('dl:finish', id),
     abort: (id) => ipcRenderer.invoke('dl:abort', id),
   },
+  lib: {
+    list: () => ipcRenderer.invoke('lib:list'),
+    open: (file) => ipcRenderer.invoke('lib:open', file),
+    pick: () => ipcRenderer.invoke('lib:pick'),
+    trash: (file) => ipcRenderer.invoke('lib:trash', file),
+  },
 })
