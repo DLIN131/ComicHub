@@ -335,24 +335,67 @@ const pages = {
   library() {
     setNav('library')
     const grid = h('div', { class: 'grid' })
+    const tabs = h('div', { class: 'subtabs' })
     const body = h('div', {}, loading())
-    const load = async () => {
-      body.replaceChildren(loading())
-      const books = await window.hub.lib.list()
+    const filterInput = h('input', { class: 'shelf-filter', type: 'search', placeholder: '在書櫃中找書名或作者…' })
+    let books = []
+    // 只篩畫面，不重新讀資料夾
+    const render = () => {
       if (currentNav !== 'library') return
-      const all = [...openedBooks.filter((b) => !books.some((x) => x.id === b.id)), ...books].filter((b) => passLang(localLang(b)))
-      if (!all.length) {
-        body.replaceChildren(status(lang ? `下載資料夾裡沒有${LANGS[lang]}的漫畫` : '下載資料夾裡還沒有漫畫。在作品頁按「下載 CBZ」，或用「開啟漫畫檔」讀其他 CBZ'))
-        return
+      const groups = shelfGroups()
+      let group = store.get('libGroup', 'all')
+      if (group !== 'all' && group !== NO_GROUP && !groups.list.includes(group)) group = 'all'
+      const kw = filterInput.value.trim().toLowerCase()
+      const visible = books.filter((b) => passLang(localLang(b)) && (!kw || `${b.title} ${b.name} ${(b.authors || []).join(' ')}`.toLowerCase().includes(kw)))
+      const inGroup = (b, g) => (g === 'all' ? true : g === NO_GROUP ? !groups.of[b.name] : groups.of[b.name] === g)
+      const opts = [['all', '全部'], [NO_GROUP, '未分組'], ...groups.list.map((g) => [g, g])]
+      tabs.replaceChildren(
+        ...opts.map(([k, label]) =>
+          h(
+            'button',
+            {
+              class: k === group ? 'active' : '',
+              onclick: () => {
+                store.set('libGroup', k)
+                render()
+              },
+            },
+            label,
+            h('span', { class: 'count' }, String(visible.filter((b) => inGroup(b, k)).length)),
+          ),
+        ),
+      )
+      const shown = visible.filter((b) => inGroup(b, group))
+      if (!books.length) body.replaceChildren(status('下載資料夾裡還沒有漫畫。在作品頁按「下載 CBZ」，或用「開啟漫畫檔」讀其他 CBZ'))
+      else if (!shown.length) body.replaceChildren(status(kw ? `找不到「${filterInput.value.trim()}」` : lang ? `這裡沒有${LANGS[lang]}的漫畫` : '這個分組還是空的。點書櫃裡的漫畫就能設定分組'))
+      else {
+        grid.replaceChildren(...shown.map((b) => localCard(b, load)))
+        body.replaceChildren(grid)
       }
-      grid.replaceChildren(...all.map((b) => localCard(b, load)))
-      body.replaceChildren(grid)
     }
+    const load = async () => {
+      const list = await window.hub.lib.list()
+      if (currentNav !== 'library') return
+      books = [...openedBooks.filter((b) => !list.some((x) => x.id === b.id)), ...list]
+      render()
+    }
+    filterInput.oninput = render
+    // 下載完成時自動重新整理，新下載的書馬上出現
+    let doneCount = dl.allJobs().filter((j) => j.status === 'done').length
+    const off = dl.onChange((jobs) => {
+      if (currentNav !== 'library') return off()
+      const n = jobs.filter((j) => j.status === 'done').length
+      if (n !== doneCount) {
+        doneCount = n
+        load()
+      }
+    })
     view.replaceChildren(
       h(
         'div',
         { class: 'section-head' },
         h('h2', {}, '書櫃（離線閱讀）'),
+        filterInput,
         h('div', { class: 'head-btns' },
         h('button', { class: 'more', onclick: load }, '重新整理'),
         h(
@@ -375,6 +418,7 @@ const pages = {
         h('button', { class: 'more', onclick: () => window.hub.dl.openDir() }, '開啟資料夾'),
         ),
       ),
+      tabs,
       body,
     )
     load()
@@ -536,15 +580,18 @@ function parseIdQuery(q) {
   const hostName = (k) => new URL(cfg[k].base).hostname.split('.').slice(-2)[0]
   const reEsc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   let m
+  // eh 站作品要 gid + token，只能用網址查
+  if ((m = s.match(/\/g\/(\d+)\/([0-9a-f]{10})/)) && s.includes(hostName('eh'))) return { sites: ['eh'], id: `${m[1]}_${m[2]}` }
   if ((m = s.match(/\/g\/(\d+)/)) && s.includes(hostName('nh'))) return one('nh', m[1])
   if ((m = s.match(/\/(?:album|photo)\/(\d+)/))) return one('jm', m[1])
   if ((m = s.match(/aid-(\d+)/))) return one('wn', m[1])
-  for (const k of SITE_KEYS) {
+  const numbered = SITE_KEYS.filter((k) => k !== 'eh')
+  for (const k of numbered) {
     const c = cfg[k]
     const names = [k, c.prefix, c.label, c.label.slice(0, 2), hostName(k)].filter(Boolean).map(reEsc)
     if ((m = t.match(new RegExp(`^(?:${names.join('|')})(\\d+)$`, 'i')))) return one(k, m[1])
   }
-  if ((m = t.match(/^\d{1,8}$/))) return { sites: SITE_KEYS, id: String(Number(m[0])), plain: true }
+  if ((m = t.match(/^\d{1,8}$/))) return { sites: numbered, id: String(Number(m[0])), plain: true }
   return null
 }
 
@@ -645,6 +692,30 @@ function renderDetail(box, close, d) {
   if (d.chapters.length > 1) actions.append(h('button', { class: 'btn', onclick: () => download(d, d.chapters) }, `下載全部 ${d.chapters.length} 話 (CBZ)`))
   else actions.append(h('button', { class: 'btn', onclick: () => download(d, [d.chapters[0] || null]) }, '下載 CBZ'))
 
+  // 用此漫畫搜尋：到所有站找同一本（其他語言版本、其他站的上傳）
+  const authors = d.tags.filter((t) => t.label === '作者').map((t) => t.name)
+  const panel = searchPanel([
+    { label: '書名', q: cleanTitle(d.title) },
+    d.subtitle ? { label: '原文書名', q: cleanTitle(d.subtitle) } : {},
+    ...(authors.length ? authors : parseAuthors(d.title)).map((a) => ({ label: '作者', q: a })),
+    { label: '完整書名', q: d.title },
+  ])
+  panel.classList.add('hidden')
+  actions.append(
+    h(
+      'button',
+      {
+        class: 'btn',
+        title: '用書名或作者到所有站搜尋',
+        onclick: () => {
+          panel.classList.toggle('hidden')
+          if (!panel.classList.contains('hidden')) panel.querySelector('input').focus()
+        },
+      },
+      '用此漫畫搜尋',
+    ),
+  )
+
   const meta = h(
     'div',
     { class: 'meta' },
@@ -654,6 +725,7 @@ function renderDetail(box, close, d) {
     h('div', { class: 'info' }, d.lang ? h('span', {}, '語言', h('b', {}, LANGS[d.lang])) : null, d.info.map(([k, v]) => h('span', {}, k, h('b', {}, v)))),
     tagEls,
     actions,
+    panel,
   )
   const parts = [close, h('div', { class: 'detail-main' }, h('div', { class: 'cover' }, h('img', { src: d.cover, alt: '' })), meta)]
   if (d.chapters.length > 1) {
@@ -709,35 +781,250 @@ function localLang(b) {
   return { lang: '' }
 }
 
-function localCard(b, reload) {
-  const site = siteOfLocal(b)
-  const del = h('button', {
-    class: 'card-del',
-    title: '刪除（移到資源回收筒）',
-    onclick: async (e) => {
-      e.stopPropagation()
-      if (!confirm(`刪除「${b.name}」？檔案會移到資源回收筒。`)) return
-      const r = await window.hub.lib.trash(b.file)
-      if (!r.ok) return toast(r.error)
-      const i = openedBooks.findIndex((x) => x.id === b.id)
-      if (i >= 0) openedBooks.splice(i, 1)
-      reload()
-    },
-  }, '✕')
+// ---------- 書櫃分組（以檔名記，換下載資料夾也不會亂掉） ----------
+
+const NO_GROUP = '__none'
+function shelfGroups() {
+  const of = store.get('libGroups', {})
+  const list = [...new Set([...store.get('libGroupList', []), ...Object.values(of)])].filter(Boolean)
+  return { of, list }
+}
+function setShelfGroup(name, group) {
+  const of = store.get('libGroups', {})
+  if (group) of[name] = group
+  else delete of[name]
+  store.set('libGroups', of)
+  if (group) store.set('libGroupList', [...new Set([...store.get('libGroupList', []), group])])
+}
+function deleteShelfGroup(group) {
+  const of = store.get('libGroups', {})
+  for (const k of Object.keys(of)) if (of[k] === group) delete of[k]
+  store.set('libGroups', of)
+  store.set('libGroupList', store.get('libGroupList', []).filter((g) => g !== group))
+}
+
+/** 書名開頭的 [社團 (作者)] 或 [作者]，拆出作者名（ComicInfo 沒寫作者時用） */
+function parseAuthors(title) {
+  const m = String(title || '').match(/^\s*(?:\([^)]*\)\s*)?\[([^\]]+)\]/)
+  if (!m || /翻訳|翻譯|汉化|漢化|chinese|english|中文|DL版|digital/i.test(m[1])) return []
+  const inner = m[1].match(/^(.*?)\s*\(([^)]+)\)\s*$/)
+  const names = inner ? [...inner[2].split(/[,、，]/), inner[1]] : m[1].split(/[,、，]/)
+  return [...new Set(names.map((s) => s.trim()).filter((s) => s && s.length < 40))]
+}
+
+/** 拿掉 [社團]、(活動)、{漢化組}、【…】 這些標記，剩下書名本體，拿來到各站搜同一本 */
+function cleanTitle(t) {
+  const s = String(t || '')
+    .split(/\s[|｜]\s/)[0]
+    .replace(/\[[^\]]*\]|\([^)]*\)|\{[^}]*\}|【[^】]*】|（[^）]*）/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return s.length >= 2 ? s : String(t || '').trim()
+}
+
+/** 「用此漫畫搜尋」面板：可改搜尋字，或點候選（書名、日文名、作者），一次搜所有勾選的站 */
+function searchPanel(candidates, onGo) {
+  const list = [...new Map(candidates.filter((c) => c.q).map((c) => [c.q, c])).values()]
+  const input = h('input', { type: 'search', value: list[0]?.q || '', placeholder: '要搜尋的文字' })
+  const go = (q) => {
+    q = (q ?? input.value).trim()
+    if (!q) return
+    onGo?.()
+    closeDetail()
+    $('#searchInput').value = q
+    pages.search(q, store.get('searchSites', SITE_KEYS), { keyword: true })
+  }
+  input.onkeydown = (e) => e.key === 'Enter' && go()
   return h(
     'div',
-    { class: 'card', title: b.name, onclick: () => openLocal(b) },
+    { class: 'search-panel' },
+    h('div', { class: 'sp-row' }, input, h('button', { class: 'btn primary', onclick: () => go() }, '搜尋所有站')),
+    h(
+      'div',
+      { class: 'sp-chips' },
+      list.map((c) =>
+        h(
+          'button',
+          {
+            class: 'tag',
+            title: `搜尋「${c.q}」`,
+            onclick: () => {
+              input.value = c.q
+              go(c.q)
+            },
+          },
+          h('span', { class: 'sp-k' }, c.label),
+          c.q,
+        ),
+      ),
+    ),
+  )
+}
+
+function localCard(b, reload) {
+  const site = siteOfLocal(b)
+  const group = shelfGroups().of[b.name]
+  return h(
+    'div',
+    { class: `card${b.error ? ' broken' : ''}`, title: b.name, onclick: () => bookPopup(b, reload) },
     h(
       'div',
       { class: 'thumb' },
-      h('img', { src: b.cover, loading: 'lazy', alt: '', onerror: (e) => (e.target.style.visibility = 'hidden') }),
+      b.cover ? h('img', { src: b.cover, loading: 'lazy', alt: '', onerror: (e) => (e.target.style.visibility = 'hidden') }) : h('div', { class: 'broken-icon' }, '!'),
       site ? badge(site) : h('span', { class: 'badge local' }, b.source || '本機'),
       langBadge(localLang(b).lang),
-      del,
+      group ? h('span', { class: 'group-tag' }, group) : null,
     ),
     h('div', { class: 'title' }, b.title),
-    h('div', { class: 'sub' }, [b.chapter, `${b.pageCount} 頁`].filter(Boolean).join('・')),
+    h('div', { class: 'sub' }, b.error ? `無法讀取：${b.error}` : [b.chapter, `${b.pageCount} 頁`].filter(Boolean).join('・')),
   )
+}
+
+/** 書櫃的管理小視窗：閱讀、分組、作者相關作品、用書名搜尋、刪除 */
+function bookPopup(b, reload) {
+  const site = siteOfLocal(b)
+  const authors = b.authors?.length ? b.authors : parseAuthors(b.name.replace(/^\[[^\]]+\]\s*/, ''))
+  const fmtSize = (n) => (n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`)
+  // Notes 是「站名 編號」，有的話可以回到網站上的作品頁
+  const nm = String(b.notes || '').match(/^(.*)\s(\S+)$/)
+  const srcSite = nm && SITE_KEYS.find((k) => SITES[k].label === nm[1])
+  const close = h('button', { class: 'close', onclick: closeDetail, title: '關閉 (Esc)' }, '×')
+
+  const groups = shelfGroups()
+  const cur = groups.of[b.name] || ''
+  const sel = h(
+    'select',
+    {
+      onchange: () => {
+        setShelfGroup(b.name, sel.value)
+        toast(sel.value ? `已移到「${sel.value}」` : '已移出分組')
+        reload()
+      },
+    },
+    h('option', { value: '' }, '未分組'),
+    groups.list.map((g) => h('option', { value: g, selected: g === cur ? 'selected' : false }, g)),
+  )
+  const newName = h('input', { type: 'text', placeholder: '新分組名稱', maxlength: '30' })
+  const addGroup = () => {
+    const g = newName.value.trim()
+    if (!g) return newName.focus()
+    setShelfGroup(b.name, g)
+    toast(`已移到「${g}」`)
+    reload()
+    bookPopup({ ...b }, reload)
+  }
+  newName.onkeydown = (e) => e.key === 'Enter' && addGroup()
+
+  const actions = h('div', { class: 'actions' })
+  if (!b.error) actions.append(h('button', { class: 'btn primary', onclick: () => openLocal(b) }, '開始閱讀'))
+  if (srcSite) actions.append(h('button', { class: 'btn', onclick: () => openDetail({ site: srcSite, id: nm[2], title: b.title, cover: b.cover }) }, '網站作品頁'))
+  actions.append(
+    h('button', { class: 'btn', onclick: () => window.hub.dl.show(b.file) }, '在資料夾顯示'),
+    h(
+      'button',
+      {
+        class: 'btn danger',
+        onclick: async () => {
+          if (!confirm(`刪除「${b.name}」？檔案會移到資源回收筒。`)) return
+          const r = await window.hub.lib.trash(b.file)
+          if (!r.ok) return toast(r.error)
+          const i = openedBooks.findIndex((x) => x.id === b.id)
+          if (i >= 0) openedBooks.splice(i, 1)
+          setShelfGroup(b.name, '')
+          closeDetail()
+          toast('已移到資源回收筒')
+          reload()
+        },
+      },
+      '刪除',
+    ),
+  )
+
+  const info = [
+    b.pageCount ? ['頁數', `${b.pageCount}`] : null,
+    b.size ? ['大小', fmtSize(b.size)] : null,
+    b.mtime ? ['下載時間', new Date(b.mtime).toLocaleString()] : null,
+  ].filter(Boolean)
+
+  const box = h(
+    'div',
+    { class: 'detail-box book-pop' },
+    close,
+    h(
+      'div',
+      { class: 'detail-main' },
+      h('div', { class: 'cover' }, b.cover ? h('img', { src: b.cover, alt: '' }) : h('div', { class: 'broken-icon' }, '!')),
+      h(
+        'div',
+        { class: 'meta' },
+        site ? badge(site, true) : h('span', { class: 'badge local inline' }, b.source || '本機'),
+        h('h1', {}, b.title),
+        b.chapter ? h('div', { class: 'subtitle' }, b.chapter) : null,
+        b.error ? status(`無法讀取這個檔案：${b.error}`, true) : null,
+        h('div', { class: 'info' }, info.map(([k, v]) => h('span', {}, k, h('b', {}, v)))),
+        authors.length
+          ? h(
+              'div',
+              { class: 'tag-group' },
+              h('span', { class: 'k' }, '作者'),
+              h(
+                'div',
+                { class: 'v' },
+                authors.map((a) =>
+                  h(
+                    'button',
+                    {
+                      class: 'tag',
+                      title: `在所有站搜尋「${a}」的作品`,
+                      onclick: () => {
+                        closeDetail()
+                        $('#searchInput').value = a
+                        pages.search(a, store.get('searchSites', SITE_KEYS), { keyword: true })
+                      },
+                    },
+                    a,
+                  ),
+                ),
+                h('span', { class: 'hint-inline' }, '點作者名搜尋相關作品'),
+              ),
+            )
+          : null,
+        h('div', { class: 'tag-group' }, h('span', { class: 'k' }, '分組'), h('div', { class: 'v group-row' }, sel, newName, h('button', { class: 'btn', onclick: addGroup }, '新增分組'))),
+        actions,
+      ),
+    ),
+    h('h3', {}, '用此漫畫搜尋'),
+    searchPanel([
+      { label: '書名', q: cleanTitle(b.title) },
+      { label: '完整書名', q: b.title },
+      ...authors.map((a) => ({ label: '作者', q: a })),
+    ]),
+  )
+  if (cur) {
+    box.append(
+      h(
+        'div',
+        { class: 'pop-foot' },
+        h(
+          'button',
+          {
+            class: 'link-btn',
+            onclick: () => {
+              if (!confirm(`刪除分組「${cur}」？分組裡的漫畫不會被刪除，只會變成未分組。`)) return
+              deleteShelfGroup(cur)
+              closeDetail()
+              reload()
+            },
+          },
+          `刪除分組「${cur}」`,
+        ),
+      ),
+    )
+  }
+  detailToken++
+  detailEl.replaceChildren(box)
+  detailEl.classList.remove('hidden')
+  detailEl.scrollTop = 0
 }
 
 function openLocal(b) {
@@ -872,8 +1159,17 @@ async function openReader(d, chapterId) {
   }
 }
 
-function loadPage(el, retry = 0) {
+async function loadPage(el, retry = 0) {
   const p = el.page
+  // eh 站的圖片網址要先開閱讀頁才拿得到；重試時換一台圖片伺服器
+  if (p.resolve && (!p.url || retry)) {
+    try {
+      p.url = await p.resolve(retry > 0)
+    } catch (e) {
+      el.replaceChildren(h('div', { class: 'err' }, `第 ${Number(el.dataset.i) + 1} 頁：${e.message} `, h('button', { class: 'btn', onclick: () => loadPage(el, 1) }, '重試')))
+      return
+    }
+  }
   const img = new Image()
   img.decoding = 'async'
   img.onload = () => {
@@ -1138,4 +1434,4 @@ loadConfig().then(() => {
 })
 
 // 測試用
-window.__app = { pages, openDetail, openReader, SITES, dl }
+window.__app = { pages, openDetail, openReader, closeDetail, SITES, dl }

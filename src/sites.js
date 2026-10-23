@@ -369,8 +369,161 @@ const wn = {
   },
 }
 
-export const SITES = { nh, jm, wn }
-export const SITE_KEYS = ['nh', 'jm', 'wn']
+// ============ eh 站（網頁） ============
+
+/** 列表的分類 → 沒有語言標籤時當成日文的分類 */
+const EH_JA_CATS = /doujinshi|manga|artist cg|game cg|non-h/i
+const EH_LANG_NAMES = { zh: 'chinese', en: 'english' }
+
+const eh = {
+  key: 'eh',
+  color: '#b5835a',
+  short: 'EH',
+  sorts: [
+    ['latest', '最新'],
+    ['popular', '熱門'],
+  ],
+  /** 網站用「next=上一頁最後一本」翻頁，記下每個列表第 N 頁的網址 */
+  cursors: new Map(),
+  /** 編號 = gid_token（兩個都要有才能開作品頁） */
+  split(id) {
+    const [gid, token] = String(id).split('_')
+    return { gid, token }
+  },
+  withLang(q) {
+    const l = EH_LANG_NAMES[langFilter]
+    return [q.trim(), l ? `language:${l}$` : ''].filter(Boolean).join(' ')
+  },
+  list(doc) {
+    const items = []
+    const seen = new Set()
+    for (const a of doc.querySelectorAll('a[href*="/g/"]')) {
+      const m = (a.getAttribute('href') || '').match(/\/g\/(\d+)\/([0-9a-f]{10})/)
+      if (!m || seen.has(m[1])) continue
+      const row = a.closest('tr, .gl1t')
+      if (!row) continue
+      const title = text(a.querySelector('.glink')) || text(row.querySelector('.glink'))
+      if (!title) continue
+      seen.add(m[1])
+      const img = row.querySelector('img[data-src], .glthumb img, img')
+      const src = [img?.getAttribute('data-src'), img?.getAttribute('src')].find((u) => u && !u.startsWith('data:')) || ''
+      const cat = text(row.querySelector('.cn, .cs'))
+      const pages = (text(row).match(/(\d+)\s*pages?/) || [])[1]
+      const langTag = [...row.querySelectorAll('.gt, .gtl')].map((g) => g.getAttribute('title') || '').find((t) => t.startsWith('language:') && !t.endsWith('translated'))
+      items.push({
+        site: 'eh',
+        id: `${m[1]}_${m[2]}`,
+        title,
+        cover: src,
+        sub: [cat, pages ? `${pages} 頁` : ''].filter(Boolean).join('・'),
+        pages: pages ? Number(pages) : null,
+        lang: detectLang(langTag || '', bracketTags(title)) || (EH_JA_CATS.test(cat) ? 'ja' : ''),
+      })
+    }
+    return items
+  },
+  async listPage(first, page) {
+    let url = first
+    if (page > 1) {
+      url = this.cursors.get(first)?.[page]
+      if (!url) return { items: [], hasMore: false }
+    }
+    const doc = html(await call('eh', url))
+    const next = doc.querySelector('a#dnext, a#unext')?.getAttribute('href')
+    if (!this.cursors.has(first)) this.cursors.set(first, {})
+    if (next) this.cursors.get(first)[page + 1] = next
+    return { items: this.list(doc), hasMore: !!next }
+  },
+  async latest(page, sort = 'latest') {
+    if (sort === 'popular') return page > 1 ? { items: [], hasMore: false } : { items: this.list(html(await call('eh', '/popular'))), hasMore: false }
+    const q = this.withLang('')
+    return this.listPage(q ? `/?f_search=${encodeURIComponent(q)}` : '/', page)
+  },
+  async search(q, page) {
+    return this.listPage(`/?f_search=${encodeURIComponent(this.withLang(q))}`, page)
+  },
+  async detail(id) {
+    const { gid, token } = this.split(id)
+    if (!token) throw new Error('需要完整的作品網址（含 token）')
+    const url = `/g/${gid}/${token}/`
+    let doc = html(await call('eh', url))
+    // 有些作品先出「內容警告」頁，帶 nw=always 才會進去
+    if (!doc.querySelector('#gn') && /nw=always/.test(doc.documentElement.innerHTML)) doc = html(await call('eh', `${url}?nw=always`))
+    if (!doc.querySelector('#gn')) throw new Error(text(doc.querySelector('.d p, p')) || '找不到（可能已被刪除）')
+    const nsName = { language: '語言', parody: '原作', character: '角色', group: '社團', artist: '作者', cosplayer: 'Coser', male: '標籤', female: '標籤', mixed: '標籤', other: '標籤', reclass: '分類' }
+    const tags = []
+    for (const tr of doc.querySelectorAll('#taglist tr')) {
+      const ns = text(tr.querySelector('.tc')).replace(/:$/, '')
+      for (const a of tr.querySelectorAll('a')) {
+        const name = text(a)
+        tags.push({ label: nsName[ns] || ns, name: ['male', 'female', 'mixed'].includes(ns) ? `${ns[0]}:${name}` : name, query: `${ns}:"${name}$"`, ns })
+      }
+    }
+    const order = ['作者', '社團', '原作', '角色', '語言', '標籤']
+    tags.sort((a, b) => (order.indexOf(a.label) + 99) % 99 - ((order.indexOf(b.label) + 99) % 99))
+    const info = [['編號', gid]]
+    for (const tr of doc.querySelectorAll('#gdd tr')) {
+      const k = text(tr.querySelector('.gdt1')).replace(/:$/, '')
+      const v = text(tr.querySelector('.gdt2'))
+      const zh = { Posted: '上傳', Language: '語言', 'File Size': '大小', Length: '頁數', Favorited: '收藏數' }[k]
+      if (zh && zh !== '語言') info.push([zh, v.replace(/\s*pages?$/, '').replace(/\s*times$/, '')])
+    }
+    const pages = Number((text(doc.querySelector('#gdd')).match(/(\d+)\s*pages?/) || [])[1]) || null
+    const cover = ((doc.querySelector('#gd1 div')?.getAttribute('style') || '').match(/url\(([^)]+)\)/) || [])[1] || ''
+    const langNames = tags.filter((t) => t.ns === 'language' && t.name !== 'translated').map((t) => t.name).join(' ')
+    const title = text(doc.querySelector('#gn'))
+    return {
+      site: 'eh',
+      id: `${gid}_${token}`,
+      title,
+      subtitle: text(doc.querySelector('#gj')),
+      cover,
+      tags,
+      lang: detectLang(langNames, bracketTags(title)) || (langNames ? '' : 'ja'),
+      info,
+      chapters: [],
+      pages,
+      firstDoc: doc,
+      related: [],
+      url: `${baseOf('eh')}${url}`,
+    }
+  },
+  /** 縮圖頁只有每頁的閱讀網址（/s/...），真正的圖要再開那一頁才拿得到，所以閱讀時才逐頁解析 */
+  async read(d) {
+    const { gid, token } = this.split(d.id)
+    const links = (doc) => [...doc.querySelectorAll('#gdt a[href*="/s/"]')].map((a) => a.getAttribute('href'))
+    const first = links(d.firstDoc || html(await call('eh', `/g/${gid}/${token}/`)))
+    const perPage = first.length || 20
+    const total = d.pages || first.length
+    const rest = []
+    for (let p = 1; p * perPage < total; p++) rest.push(p)
+    const more = []
+    for (let i = 0; i < rest.length; i += 4) {
+      const batch = await Promise.all(rest.slice(i, i + 4).map((p) => call('eh', `/g/${gid}/${token}/?p=${p}`).then((s) => links(html(s)))))
+      more.push(...batch.flat())
+    }
+    const all = [...new Set([...first, ...more])]
+    if (!all.length) throw new Error('找不到圖片')
+    return all.map((s) => ({ url: '', segs: 0, resolve: (retry) => this.resolve(s, retry) }))
+  },
+  /** 開閱讀頁拿圖片網址；retry 時帶 nl 參數換一台圖片伺服器 */
+  async resolve(spage, retry) {
+    let url = spage
+    if (retry && this._nl?.[spage]) url += `${url.includes('?') ? '&' : '?'}nl=${this._nl[spage]}`
+    const s = await call('eh', url)
+    const src = (s.match(/<img id="img" src="([^"]+)"/) || [])[1]
+    const nl = (s.match(/nl\('([^']+)'\)/) || [])[1]
+    ;(this._nl ||= {})[spage] = nl
+    if (!src) throw new Error(/limit/i.test(s) ? '已達網站的圖片瀏覽上限，請稍後再試或登入' : '找不到圖片')
+    return src
+  },
+  async favorites(page) {
+    return this.listPage('/favorites.php', page)
+  },
+}
+
+export const SITES = { nh, jm, wn, eh }
+export const SITE_KEYS = ['nh', 'jm', 'wn', 'eh']
 
 export async function loadConfig() {
   CONFIG = await window.hub.config()

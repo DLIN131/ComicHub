@@ -127,7 +127,7 @@ function safeName(s) {
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/[. ]+$/, '')
-  return n.length > 150 ? n.slice(0, 150).trim() : n || 'untitled'
+  return n.length > 200 ? n.slice(0, 200).trim() : n || 'untitled'
 }
 
 function setup() {

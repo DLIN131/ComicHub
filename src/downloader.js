@@ -1,5 +1,5 @@
 // 下載佇列：一次下載一本，每本同時抓 4 張圖，邊抓邊交給主程序寫進 .cbz
-import { SITES } from './sites.js'
+import { SITES, getConfig } from './sites.js'
 
 const CONCURRENCY = 4
 const listeners = new Set()
@@ -33,9 +33,24 @@ export const allJobs = () => jobs
 export const activeCount = () => jobs.filter((j) => j.status === 'queued' || j.status === 'running').length
 
 /** 檔名：[來源] 標題（多話的加上 - 話數） */
+/** 作品（或單話）的編號標記，例如 JM123、#456；放進檔名讓不同作品的檔案絕不會撞名互蓋 */
+function idTag(d, chapter) {
+  const id = String(chapter?.id || d.id)
+  if (d.site === 'eh') return `EH${id.split('_')[0]}`
+  return `${getConfig().sites[d.site]?.prefix || ''}${id}`
+}
+
+/**
+ * 檔名：[來源] 標題 - 話數 (編號)
+ * 標題太長只截標題，話數和編號一定留著（以前整串截斷，長標題的各話會變成同一個檔名互相覆蓋）
+ */
 export function fileName(d, chapter) {
   const multi = chapter && d.chapters.length > 1
-  return `[${SITES[d.site].label}] ${d.title}${multi ? ` - ${chapter.title}` : ''}`
+  const head = `[${SITES[d.site].label}] `
+  const tail = `${multi && chapter.title ? ` - ${chapter.title.slice(0, 40)}` : ''} (${idTag(d, chapter)})`
+  const room = Math.max(20, 150 - head.length - tail.length)
+  const title = d.title.length > room ? d.title.slice(0, room).trim() + '…' : d.title
+  return head + title + tail
 }
 
 export const isQueued = (d, chapterId) =>
@@ -192,7 +207,15 @@ async function run(j) {
     while (next < pages.length && !failed && !j.cancel) {
       const i = next++
       const p = pages[i]
-      const r = await window.hub.dl.fetch(j.site, p.url)
+      let r
+      try {
+        if (p.resolve && !p.url) p.url = await p.resolve(false)
+        r = await window.hub.dl.fetch(j.site, p.url)
+        // 圖片伺服器掛掉時換一台再試
+        if (!r.ok && p.resolve) r = await window.hub.dl.fetch(j.site, (p.url = await p.resolve(true)))
+      } catch (e) {
+        r = { ok: false, error: e.message }
+      }
       if (!r.ok) {
         failed = `第 ${i + 1} 頁：${r.error}`
         break

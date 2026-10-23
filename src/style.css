@@ -870,3 +870,137 @@ main {
 .head-btns .more {
   margin-left: 0;
 }
+
+/* ---------- eh 站 ---------- */
+:root {
+  --eh: #b5835a;
+}
+.badge.eh {
+  background: var(--eh);
+}
+.chip.on[data-site='eh'] {
+  background: var(--eh);
+}
+.account[data-site='eh'] {
+  border-top-color: var(--eh);
+}
+
+/* ---------- 書櫃管理 / 用此漫畫搜尋 ---------- */
+.book-pop {
+  max-width: 820px;
+}
+.book-pop .detail-main .cover {
+  width: 200px;
+}
+.btn.danger {
+  color: #ff7b7b;
+}
+.btn.danger:hover {
+  border-color: #ff7b7b;
+}
+.group-row {
+  align-items: center;
+}
+.group-row select,
+.group-row input,
+.search-panel input,
+.shelf-filter {
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 9px;
+  font: inherit;
+  outline: none;
+}
+.group-row select:focus,
+.group-row input:focus,
+.search-panel input:focus,
+.shelf-filter:focus {
+  border-color: var(--accent);
+}
+.group-row input {
+  width: 140px;
+}
+.group-row .btn {
+  padding: 5px 12px;
+}
+.shelf-filter {
+  width: 240px;
+  margin-left: 10px;
+}
+.hint-inline {
+  color: var(--dim);
+  font-size: 12px;
+  align-self: center;
+}
+.group-tag {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  max-width: 70%;
+  padding: 1px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.72);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card.broken .thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.broken-icon {
+  font-size: 40px;
+  font-weight: 800;
+  color: #ff7b7b;
+  text-align: center;
+  padding: 40px 0;
+}
+.card.broken .sub {
+  color: #ff7b7b;
+}
+.search-panel {
+  margin-top: 14px;
+  padding: 14px;
+  background: var(--panel2);
+  border-radius: 10px;
+}
+.search-panel .sp-row {
+  display: flex;
+  gap: 8px;
+}
+.search-panel .sp-row input {
+  flex: 1;
+  background: var(--panel);
+}
+.sp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.sp-chips .tag {
+  background: var(--panel);
+}
+.sp-k {
+  color: var(--dim);
+  margin-right: 6px;
+}
+.pop-foot {
+  margin-top: 16px;
+  text-align: right;
+}
+.link-btn {
+  background: none;
+  border: 0;
+  color: var(--dim);
+  text-decoration: underline;
+  font-size: 12px;
+}
+.link-btn:hover {
+  color: #ff7b7b;
+}

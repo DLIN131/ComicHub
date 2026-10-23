@@ -98,7 +98,7 @@ async function loadBook(file) {
   if (ci) {
     try {
       const xml = (await readEntry(file, ci)).toString('utf8')
-      info = { title: tag(xml, 'Title'), series: tag(xml, 'Series'), web: tag(xml, 'Web'), notes: tag(xml, 'Notes'), tags: tag(xml, 'Tags') }
+      info = { title: tag(xml, 'Title'), series: tag(xml, 'Series'), web: tag(xml, 'Web'), notes: tag(xml, 'Notes'), tags: tag(xml, 'Tags'), writer: tag(xml, 'Writer') }
     } catch {}
   }
   const book = { id, file, mtime: st.mtimeMs, size: st.size, pages, info }
@@ -109,15 +109,17 @@ async function loadBook(file) {
 /** 給頁面的資料 */
 function summary(b) {
   const name = path.basename(b.file).replace(/\.(cbz|zip)$/i, '')
-  // 檔名是「[站名] 標題」或「[站名] 標題 - 第N話」
-  const m = name.match(/^\[([^\]]+)\]\s*(.*)$/)
+  // 檔名是「[站名] 標題 (編號)」或「[站名] 標題 - 第N話 (編號)」；舊版檔名沒有編號
+  const m = name.match(/^\[([^\]]+)\]\s*(.*?)(?:\s+\(([^()]+)\))?$/)
   return {
     id: b.id,
     file: b.file,
     name,
     source: m ? m[1] : '',
-    title: b.info.series || (m ? m[2] : name),
+    title: b.info.series || b.info.title || (m ? m[2] : name),
     chapter: b.info.series ? b.info.title : '',
+    authors: b.info.writer ? b.info.writer.split(/\s*,\s*/).filter(Boolean) : [],
+    tags: b.info.tags ? b.info.tags.split(/\s*,\s*/).filter(Boolean) : [],
     notes: b.info.notes || '',
     web: b.info.web || '',
     pageCount: b.pages.length,
@@ -138,9 +140,17 @@ async function listDir(dir) {
   const out = []
   for (const n of names) {
     if (!/\.(cbz|zip)$/i.test(n)) continue
+    const file = path.join(dir, n)
     try {
-      out.push(summary(await loadBook(path.join(dir, n))))
-    } catch {}
+      out.push(summary(await loadBook(file)))
+    } catch (err) {
+      // 讀不了的檔案也列出來（標示錯誤），不要默默從書櫃消失
+      let mtime = 0
+      try {
+        mtime = (await fs.promises.stat(file)).mtimeMs
+      } catch {}
+      out.push({ id: idOf(file), file, name: n.replace(/\.(cbz|zip)$/i, ''), title: n, error: err.message || String(err), mtime, pageCount: 0, pages: [], authors: [], tags: [] })
+    }
   }
   return out.sort((a, b) => b.mtime - a.mtime)
 }

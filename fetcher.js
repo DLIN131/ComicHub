@@ -11,6 +11,7 @@ const SITES = {
   nh: { label: b64('bmhlbnRhaQ=='), base: b64('aHR0cHM6Ly9uaGVudGFpLm5ldA=='), login: '/login/', prefix: '#' },
   jm: { label: b64('56aB5ryr5aSp5aCC'), base: b64('aHR0cHM6Ly8xOGNvbWljLnZpcA=='), login: '/login', prefix: 'JM' },
   wn: { label: b64('57Sz5aOr5ryr55Wr'), base: b64('aHR0cHM6Ly93d3cud25hY2cuY29t'), login: '/users-login.html', prefix: b64('d25hY2c=') },
+  eh: { label: b64('RS1IZW50YWk='), base: b64('aHR0cHM6Ly9lLWhlbnRhaS5vcmc='), login: null, prefix: '' },
 }
 
 let UA = ''
@@ -40,7 +41,7 @@ const label = (site) => SITES[site].label
 const base = (site) => (overrides[site] || SITES[site].base).replace(/\/+$/, '')
 const partition = (site) => `persist:${site}`
 const sesOf = (site) => session.fromPartition(partition(site))
-const loginUrl = (site) => base(site) + SITES[site].login
+const loginUrl = (site) => (site === 'eh' ? forumUrl('/index.php?act=Login&CODE=00') : base(site) + SITES[site].login)
 
 /** 取網域最後兩段，例如 cdn.example.com → example.com */
 function rootDomain(host) {
@@ -266,8 +267,19 @@ async function authStatus(site) {
     const m = html.match(/歡迎[：:,，\s]*(?:<[^>]+>)*\s*([^<\s]+)/) || html.match(/class="[^"]*user_name[^"]*"[^>]*>\s*([^<]+)/)
     return { loggedIn: true, name: m ? m[1].trim() : '' }
   }
+  if (site === 'eh') {
+    // 登入後論壇會在整個網域寫 ipb_member_id / ipb_pass_hash
+    const list = await sesOf('eh').cookies.get({ url: base('eh'), name: 'ipb_member_id' })
+    if (!list.length || list[0].value === '0') return { loggedIn: false }
+    const r = await get('eh', forumUrl('/index.php'))
+    const m = r.ok && r.data.match(/Logged in as:?\s*(?:<[^>]+>\s*)*([^<]+)</i)
+    return { loggedIn: true, name: m ? m[1].trim() : '' }
+  }
   return { loggedIn: false }
 }
+
+/** eh 站的帳號在論壇子網域 */
+const forumUrl = (p) => base('eh').replace('://', '://forums.') + p
 
 async function logout(site) {
   const ses = sesOf(site)
