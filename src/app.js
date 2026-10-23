@@ -909,6 +909,41 @@ function descramble(img, num) {
   return c
 }
 
+/**
+ * 方向鍵換頁：跳到下一頁 / 上一頁的頂端。
+ * 比畫面還高的頁（條漫）先一段一段捲完，捲到底才換下一頁，免得跳過內容。
+ */
+function turnPage(dir) {
+  const els = [...readerEl.querySelectorAll('.page')]
+  if (!els.length) return
+  const top = readerEl.scrollTop
+  const view = readerEl.clientHeight
+  const step = view * 0.9
+  // 目前這頁 = 頂端已經捲過畫面頂端的最後一頁（多留 2px 誤差）
+  let cur = 0
+  for (let i = 0; i < els.length; i++) {
+    if (els[i].offsetTop <= top + 2) cur = i
+    else break
+  }
+  const el = els[cur]
+  const pageTop = el.offsetTop
+  const pageBottom = pageTop + el.offsetHeight
+  let target
+  if (dir > 0) {
+    if (pageBottom - (top + view) > 40) target = Math.min(top + step, pageBottom - view)
+    else if (cur < els.length - 1) target = els[cur + 1].offsetTop
+    else target = readerEl.scrollHeight
+  } else if (top - pageTop > 2) {
+    // 這頁的開頭還在上面：長頁就往回捲一段，不然回到這頁頂端
+    target = Math.max(pageTop, top - step)
+  } else if (cur > 0) {
+    const prev = els[cur - 1]
+    // 上一頁比畫面高時，停在它的最後一段
+    target = prev.offsetHeight > view ? prev.offsetTop + prev.offsetHeight - view : prev.offsetTop
+  } else target = 0
+  readerEl.scrollTop = target
+}
+
 function closeReader() {
   readerToken++
   observer?.disconnect()
@@ -1066,12 +1101,21 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' || e.key === 'Backspace') closeReader()
     else if (e.key === '+' || e.key === '=') readerEl.querySelector('.reader-bar button[title^="放大"]').click()
     else if (e.key === '-') readerEl.querySelector('.reader-bar button[title^="縮小"]').click()
-    else if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') {
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+      e.preventDefault()
+      turnPage(1)
+    } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+      e.preventDefault()
+      turnPage(-1)
+    } else if (e.key === 'PageDown' || e.key === ' ') {
       e.preventDefault()
       readerEl.scrollBy({ top: readerEl.clientHeight * 0.9, behavior: 'smooth' })
-    } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+    } else if (e.key === 'PageUp') {
       e.preventDefault()
       readerEl.scrollBy({ top: -readerEl.clientHeight * 0.9, behavior: 'smooth' })
+    } else if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault()
+      readerEl.scrollTop = e.key === 'Home' ? 0 : readerEl.scrollHeight
     }
     return
   }
