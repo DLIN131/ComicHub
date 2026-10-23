@@ -93,7 +93,20 @@ function setupIpc() {
   ipcMain.handle('shell:external', (_e, url) => shell.openExternal(url))
 }
 
+// 同時只開一份：再開一次就把原本的視窗叫到前面（兩份同時跑會互相清掉對方的更新暫存、下載狀態也會打架）
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (!mainWin || mainWin.isDestroyed()) return
+    if (mainWin.isMinimized()) mainWin.restore()
+    mainWin.show()
+    mainWin.focus()
+  })
+}
+
 app.whenReady().then(() => {
+  if (!app.hasSingleInstanceLock()) return
   fetcher.init(UA)
   setupImageHeaders()
   setupIpc()

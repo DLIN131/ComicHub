@@ -12,7 +12,11 @@ const installDir = path.dirname(process.execPath)
 let work = null
 let extracted = null
 
-/** 清掉以前的更新暫存；刪不掉的（例如被鎖住）就留著，下次再清，不影響這次更新 */
+/**
+ * 清掉以前的更新暫存；刪不掉的（例如被鎖住）就留著，下次再清，不影響這次更新。
+ * 正在下載的那份、還有 10 分鐘內建立的（可能是另一份程式正在用）一律不碰：
+ * 以前啟動 3 秒後的清理會把剛開始下載的 update.zip 刪掉，解壓時就找不到檔案。
+ */
 function cleanOld() {
   let names = []
   try {
@@ -21,8 +25,10 @@ function cleanOld() {
     return
   }
   for (const n of names) {
+    const dir = path.join(root, n)
+    if (dir === work || Date.now() - Number(n) < 10 * 60 * 1000) continue
     try {
-      fs.rmSync(path.join(root, n), { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true })
     } catch {}
   }
 }
@@ -61,15 +67,23 @@ async function download(url, onProgress) {
     if (p !== last) { last = p; onProgress(p) }
   }
   await new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve())))
+  let size = -1
+  try {
+    size = fs.statSync(zip).size
+  } catch {}
+  if (size < 0) throw new Error('下載的更新檔不見了（可能被防毒軟體移除），請再試一次')
+  if (total && size !== total) throw new Error(`更新檔下載不完整（${size} / ${total} bytes），請再試一次`)
   return zip
 }
 
 function unzip(zip, dest) {
+  // PowerShell 錯誤訊息預設用系統編碼（Big5）輸出，改成 UTF-8 才不會變亂碼
+  const q = (s) => `'${s.replace(/'/g, "''")}'`
+  const cmd = `[Console]::OutputEncoding=[Text.Encoding]::UTF8; $ErrorActionPreference='Stop'; try { Expand-Archive -LiteralPath ${q(zip)} -DestinationPath ${q(dest)} -Force } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }`
   return new Promise((resolve, reject) => {
-    execFile('powershell.exe', [
-      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
-      `Expand-Archive -LiteralPath '${zip.replace(/'/g, "''")}' -DestinationPath '${dest.replace(/'/g, "''")}' -Force`,
-    ], { windowsHide: true }, (err, _out, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve()))
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', cmd], { windowsHide: true, encoding: 'utf8' }, (err, _out, stderr) =>
+      err ? reject(new Error(`解壓縮失敗：${(stderr || err.message).trim()}`)) : resolve(),
+    )
   })
 }
 
