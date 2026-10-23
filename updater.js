@@ -1,13 +1,31 @@
 // 桌面版程式內更新：下載新版 zip → 解壓到暫存資料夾 → 關閉程式後由批次檔覆蓋安裝資料夾 → 重新啟動
 const { app, ipcMain, net } = require('electron')
 const { spawn, execFile } = require('child_process')
-const fs = require('fs')
+// 一定要用 original-fs：Electron 的 fs 會把解壓出來的 app.asar 當成資料夾，
+// 刪不掉（ENOTEMPTY）還會一直開著它（之後 EBUSY），結果第二次以後的更新全部失敗
+const fs = require('original-fs')
 const os = require('os')
 const path = require('path')
 
-const work = path.join(os.tmpdir(), 'ComicHub-update')
+const root = path.join(os.tmpdir(), 'ComicHub-update')
 const installDir = path.dirname(process.execPath)
+let work = null
 let extracted = null
+
+/** 清掉以前的更新暫存；刪不掉的（例如被鎖住）就留著，下次再清，不影響這次更新 */
+function cleanOld() {
+  let names = []
+  try {
+    names = fs.readdirSync(root)
+  } catch {
+    return
+  }
+  for (const n of names) {
+    try {
+      fs.rmSync(path.join(root, n), { recursive: true, force: true })
+    } catch {}
+  }
+}
 
 /** 安裝資料夾能不能寫入（放在 Program Files 之類的地方就不行） */
 function canWrite() {
@@ -22,7 +40,9 @@ function canWrite() {
 }
 
 async function download(url, onProgress) {
-  fs.rmSync(work, { recursive: true, force: true })
+  cleanOld()
+  // 每次更新用新的資料夾，舊的殘留就算刪不掉也擋不到
+  work = path.join(root, String(Date.now()))
   fs.mkdirSync(work, { recursive: true })
   const zip = path.join(work, 'update.zip')
   const res = await net.fetch(url)
@@ -55,7 +75,7 @@ function unzip(zip, dest) {
 
 function setup() {
   // 上次更新留下的下載檔和解壓縮檔（約 200 MB）。程式能啟動就代表更新已經裝完，直接清掉
-  fs.rm(work, { recursive: true, force: true }, () => {})
+  setTimeout(cleanOld, 3000)
 
   ipcMain.handle('update:supported', () => app.isPackaged && process.platform === 'win32')
 
