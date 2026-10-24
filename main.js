@@ -101,7 +101,10 @@ function openSiteWindow(site, url, { login = false } = {}) {
       timer = setInterval(() => {
         if (win.isDestroyed()) return
         win.webContents
-          .executeJavaScript(`(document.querySelector('input[name="username"]') || {}).value || ''`)
+          // 頁面上有好幾個帳號欄（另外兩個在隱藏的彈窗裡），要讀使用者看得到、真的在打的那一個
+          .executeJavaScript(
+            `(() => { const all = [...document.querySelectorAll('input[name="username"]')]; const seen = all.filter((u) => u.offsetParent !== null && u.value.trim()); return ((seen[0] || all.find((u) => u.value.trim())) || {}).value || '' })()`,
+          )
           .then((v) => {
             if (v && v.trim()) typed = v.trim()
           })
