@@ -2251,8 +2251,26 @@ dl.onChange((jobs) => {
   }
 })
 
-loadConfig().then(() => {
-  // 左上角顯示目前版本
+/**
+ * 啟動的每一步各自包起來：某一步出錯（例如舊資料裡有奇怪的值）只記錯誤，不會整個卡住變黑畫面。
+ * 錯誤用 console.error 印出，主程序會記到 startup.log（見 watchdog.js）。
+ */
+const step = (name, fn) => {
+  try {
+    fn()
+  } catch (e) {
+    console.error(`startup step "${name}" failed: ${e && e.stack ? e.stack : e}`)
+  }
+}
+
+/** 頁面上方的提示條（要使用者注意、不會自己消失的訊息） */
+function notice(msg) {
+  const bar = h('div', { class: 'notice-bar' }, h('span', {}, msg), h('button', { class: 'btn', onclick: () => bar.remove() }, '知道了'))
+  view.before(bar)
+}
+
+const startup = () => {
+  step('version label', () =>
   $('.brand').append(
     h(
       'span',
@@ -2267,20 +2285,28 @@ loadConfig().then(() => {
       },
       versionText(),
     ),
-  )
-  setupLang()
-  setupSearch()
-  checkUpdate()
-  showWhatsNew()
+  ))
+  step('language', setupLang)
+  step('search', setupSearch)
+  step('check update', () => checkUpdate())
+  step("what's new", () => showWhatsNew())
   // 資料夾被刪掉後，從下載資料夾的備份把紀錄救回來了
-  if (store.get('_restoredFrom')) {
-    toast('已從下載資料夾的備份還原觀看紀錄和設定')
-    store.set('_restoredFrom', null)
-  }
-  // 告訴主程序畫面載好了（沒回報的話會自動重載，避免黑畫面卡住）
-  window.hub.ready()
-  pages.home()
-})
+  step('restore notice', () => {
+    if (store.get('_restoredFrom')) {
+      toast('已從下載資料夾的備份還原觀看紀錄和設定')
+      store.set('_restoredFrom', null)
+    }
+  })
+}
+
+loadConfig()
+  .then(startup)
+  .catch((e) => console.error(`startup failed: ${e && e.stack ? e.stack : e}`))
+  .finally(() => {
+    // 告訴主程序畫面載好了（沒回報的話會自動重載，避免黑畫面卡住）
+    window.hub.ready()
+    step('home page', () => pages.home())
+  })
 
 // 測試用
-window.__app = { pages, openDetail, openReader, closeDetail, SITES, dl, showChangelog, showWhatsNew }
+window.__app = { pages, openDetail, openReader, closeDetail, SITES, dl, showChangelog, showWhatsNew, notice, toast }

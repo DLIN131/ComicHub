@@ -1258,3 +1258,22 @@ body {
   font: inherit;
   font-size: 13px;
 }
+
+/* 需要注意的提示條 */
+.notice-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 20px 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(255, 179, 71, 0.12);
+  border: 1px solid #ffb347;
+  color: #ffd9a8;
+  line-height: 1.6;
+}
+.notice-bar span {
+  flex: 1;
+  user-select: text;
+  word-break: break-all;
+}

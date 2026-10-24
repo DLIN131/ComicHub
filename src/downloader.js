@@ -11,7 +11,9 @@ let running = false
 const KEEP = ['done', 'error']
 
 function loadDone() {
-  return (store.get('downloads', []) || []).filter((j) => KEEP.includes(j.status))
+  const list = store.get('downloads', [])
+  // 舊資料可能不是陣列（壞掉的存檔），不要讓整個程式起不來
+  return Array.isArray(list) ? list.filter((j) => j && KEEP.includes(j.status)) : []
 }
 
 function persist() {

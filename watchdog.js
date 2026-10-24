@@ -1,7 +1,9 @@
 // 啟動自我檢查：主畫面一直沒載好（黑畫面）時自己想辦法，不要讓使用者卡在一片黑。
 //   1. 畫面程序當掉、載入失敗、或 20 秒內沒回報「載好了」→ 重新載入一次
-//   2. 還是不行 → 下次改用「不用顯示卡加速」重開（顯示卡驅動造成的黑畫面很常見）
-//   3. 連這樣都不行 → 顯示說明頁，教使用者重新下載安裝
+//   2. 還是不行 → 改用「不用顯示卡加速」重開（顯示卡驅動造成的黑畫面很常見）
+//   3. 還是不行 → 把 ComicHub 自己的資料（state.json 和下載資料夾的備份）改名放旁邊（不刪），用空白資料重開
+//      （有使用者把 AppData 全刪才好，代表可能是資料裡某個值讓畫面起不來）
+//   4. 連這樣都不行 → 顯示說明頁，教使用者重新下載安裝
 // 每一步都寫進 userData/startup.log，使用者回報問題時可以看。
 const { app, ipcMain } = require('electron')
 const fs = require('original-fs')
@@ -10,9 +12,17 @@ const path = require('path')
 const READY_TIMEOUT = 20000
 const file = (n) => path.join(app.getPath('userData'), n)
 
+/** 記錄用本地時間（以前用 UTC，台灣看起來差 8 小時） */
+function localTime(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0')
+  const off = -d.getTimezoneOffset()
+  const tz = `UTC${off >= 0 ? '+' : '-'}${Math.floor(Math.abs(off) / 60)}${off % 60 ? ':' + p(Math.abs(off) % 60) : ''}`
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())} (${tz})`
+}
+
 function log(msg) {
   try {
-    const line = `${new Date().toISOString()} v${app.getVersion()} ${msg}\n`
+    const line = `${localTime()} v${app.getVersion()} ${msg}\n`
     const f = file('startup.log')
     let old = ''
     try {
@@ -22,6 +32,39 @@ function log(msg) {
     const lines = (old + line).split('\n').filter(Boolean).slice(-200)
     fs.writeFileSync(f, lines.join('\n') + '\n')
   } catch {}
+}
+
+// ---------- 資料暫放一邊 ----------
+
+function readRecovery() {
+  try {
+    return JSON.parse(fs.readFileSync(file('recovery.json'), 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
+/** 把 state.json（含 .bak）和下載資料夾裡的備份改名放旁邊，下次用空白資料開；原檔都留著 */
+function setDataAside() {
+  const stamp = localTime().slice(0, 19).replace(/[: ]/g, '-')
+  const moved = []
+  const mv = (from) => {
+    if (!fs.existsSync(from)) return
+    const to = from.replace(/\.json(\.bak)?$/, `.停用-${stamp}.json$1`)
+    try {
+      fs.renameSync(from, to)
+      moved.push(to)
+    } catch {}
+  }
+  mv(file('state.json'))
+  mv(file('state.json.bak'))
+  try {
+    for (const f of require('./state').backupFiles()) mv(f)
+  } catch {}
+  try {
+    fs.writeFileSync(file('recovery.json'), JSON.stringify({ dataSetAside: new Date().toISOString(), files: moved, notified: false }, null, 2))
+  } catch {}
+  log(`set data aside: ${moved.join(' | ') || '(nothing to move)'}`)
 }
 
 function readSafe() {
@@ -59,6 +102,7 @@ const KEEP_FILES = new Set([
   'update.log',
   'starting.flag',
   'repair.flag',
+  'recovery.json',
   // Cookie 的加密金鑰在這裡，刪了各站登入就讀不出來
   'Local State',
 ])
@@ -82,7 +126,8 @@ function deepClean(why) {
     names = fs.readdirSync(ud)
   } catch {}
   for (const n of names) {
-    if (KEEP_FILES.has(n)) continue
+    // 「停用-」開頭的是自動放在一旁的舊資料，要留給使用者 / 回報用
+    if (KEEP_FILES.has(n) || n.includes('.停用-')) continue
     // 各站的登入在 Partitions\<站>\Network（Cookies），其他都可以清
     if (n === 'Partitions') {
       let parts = []
@@ -198,7 +243,14 @@ function watch(win) {
       app.exit(0)
       return
     }
-    log(`${why} in safe mode → show help page`)
+    if (!readRecovery().dataSetAside) {
+      log(`${why} in safe mode → set ComicHub data aside and restart`)
+      setDataAside()
+      app.relaunch()
+      app.exit(0)
+      return
+    }
+    log(`${why} in safe mode with data set aside → show help page`)
     ready = true
     win.loadURL(errorPage())
   }
@@ -213,10 +265,28 @@ function watch(win) {
     clearTimeout(timer)
     startedOk()
     if (reloads) log('ready after reload')
+    const rec = readRecovery()
+    if (rec.dataSetAside && !rec.notified) {
+      log('ready after data was set aside')
+      rec.notified = true
+      try {
+        fs.writeFileSync(file('recovery.json'), JSON.stringify(rec, null, 2))
+      } catch {}
+      const msg = '上次程式開不起來，已把觀看紀錄檔暫時改名放在一旁（沒有刪除），先用空白紀錄開啟。請把 startup.log 和改名的檔案回報給開發者：' + rec.files.join('、')
+      win.webContents.executeJavaScript(`window.__app && window.__app.notice(${JSON.stringify(msg)})`).catch(() => {})
+    }
     // 頁面說載好了，但顯示卡出問題時畫面還是可能一片黑：3 秒後擷取畫面看看有沒有任何亮的東西（標題列的字一定是亮的）
     setTimeout(() => checkPainted(win), 3000)
   })
   ipcMain.on('app:error', (_e, msg) => log(`renderer error: ${String(msg).slice(0, 500)}`))
+  // 頁面上沒接住的錯誤會印在 console（例如 Uncaught TypeError），全部記下來，回報時才知道是哪一行
+  // （preload 在隔離環境裡，收不到頁面本身的錯誤，所以改從這裡收）
+  let errCount = 0
+  win.webContents.on('console-message', (_e, level, message, line, source) => {
+    if (level < 3 || errCount > 30) return
+    errCount++
+    log(`page error: ${String(message).slice(0, 400)} @ ${String(source).split('/').pop()}:${line}`)
+  })
   win.webContents.on('did-fail-load', (_e, code, desc, url, isMain) => {
     if (isMain) giveUp(`load failed ${code} ${desc}`)
   })
@@ -228,4 +298,4 @@ function watch(win) {
   arm()
 }
 
-module.exports = { beforeReady, repairIfNeeded, requestRepair, watch, log }
+module.exports = { beforeReady, repairIfNeeded, requestRepair, watch, log, readRecovery }

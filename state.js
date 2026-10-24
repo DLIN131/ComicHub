@@ -109,4 +109,4 @@ function setup() {
   app.on('will-quit', finalFlush)
 }
 
-module.exports = { setup, flush }
+module.exports = { setup, flush, backupFiles }
