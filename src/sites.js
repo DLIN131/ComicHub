@@ -260,7 +260,15 @@ const jm = {
       this.username = s.name
       if (!this.username) throw new Error('已登入，但讀不到帳號名稱。請到「帳號」頁填寫你的帳號名稱，就能讀取收藏')
     }
-    return this.list(html(await call('jm', `/user/${encodeURIComponent(this.username)}/favorite/albums?page=${page}`)), page)
+    const doc = html(await call('jm', `/user/${encodeURIComponent(this.username)}/favorite/albums?page=${page}`))
+    const r = this.list(doc, page)
+    // 第一頁就空的時候說清楚是哪個原因，不要只顯示空白
+    if (page === 1 && !r.items.length) {
+      const title = text(doc.querySelector('title'))
+      if (/^login\b/i.test(title)) throw new Error('登入已失效，請到「帳號」頁重新登入')
+      throw new Error(`帳號「${this.username}」的收藏是空的。如果網站上明明有收藏，可能是帳號名稱不對，請到「帳號」頁確認或修改`)
+    }
+    return r
   },
 }
 

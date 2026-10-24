@@ -34,7 +34,35 @@ function init(ua) {
       const fromWorker = hidden && !hidden.isDestroyed() && details.webContentsId === hidden.webContents.id
       cb({ cancel: fromWorker && ['image', 'media', 'font'].includes(details.resourceType) })
     })
+    keepLoginCookies(site, ses)
   }
+}
+
+/**
+ * 有的站登入用的是「工作階段 cookie」（沒有到期日），Chromium 關程式就丟掉，
+ * 結果每次重開都被登出。把該站自己網域的這種 cookie 改成 30 天後到期，就會存到硬碟。
+ */
+function keepLoginCookies(site, ses) {
+  ses.cookies.on('changed', (_e, c, _cause, removed) => {
+    if (removed || !c.session) return
+    const host = c.domain.replace(/^\./, '')
+    const root = rootDomain(new URL(base(site)).hostname)
+    if (host !== root && !host.endsWith('.' + root)) return
+    ses.cookies
+      .set({
+        url: `${c.secure ? 'https' : 'http'}://${host}${c.path || '/'}`,
+        name: c.name,
+        value: c.value,
+        // 開頭有點的是整個網域共用；沒有點的是只給這台主機，不能帶 domain
+        domain: c.domain.startsWith('.') ? c.domain : undefined,
+        path: c.path,
+        secure: c.secure,
+        httpOnly: c.httpOnly,
+        sameSite: c.sameSite,
+        expirationDate: Date.now() / 1000 + 30 * 24 * 3600,
+      })
+      .catch(() => {})
+  })
 }
 
 const label = (site) => SITES[site].label
@@ -282,7 +310,7 @@ async function authStatus(site) {
 
 /**
  * 從 jm 站「我的」頁找帳號名稱（沒有帳號可以實測，所以多試幾種寫法）：
- * 網址 /user/<帳號> → 收藏分頁連結 /user/<帳號>/favorite → 選單「我的」→ 頁面上出現最多次的 /user/<帳號>
+ * 網址 /user/<帳號> → 收藏分頁連結 /user/<帳號>/favorite → 選單「我的」
  */
 function jmNameFrom(url, html) {
   const dec = (s) => {
@@ -299,11 +327,8 @@ function jmNameFrom(url, html) {
   const menu =
     (html.match(/href="(?:https?:\/\/[^/"]+)?\/user\/([^"/?#]+)\/?"[^>]*>[\s\S]{0,200}?我的/) || [])[1] ||
     (html.match(/href="(?:https?:\/\/[^/"]+)?\/user\/([^"/?#]+)\/?"[^>]*>\s*<i class="fas? fa-user-circle/) || [])[1]
-  if (menu) return dec(menu)
-  const count = {}
-  for (const m of html.matchAll(/href="(?:https?:\/\/[^/"]+)?\/user\/([^"/?#]+)(?:\/[^"]*)?"/g)) count[m[1]] = (count[m[1]] || 0) + 1
-  const top = Object.entries(count).sort((a, b) => b[1] - a[1])[0]
-  return top && top[1] >= 3 ? dec(top[0]) : ''
+  // 抓不到就回空字串，讓使用者自己填；不要猜（以前猜「出現最多次的帳號」可能抓到別人，收藏就變成空的）
+  return menu ? dec(menu) : ''
 }
 
 // ---------- 使用者自己設定 / 登入時記下的帳號名稱 ----------
