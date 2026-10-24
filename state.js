@@ -2,12 +2,14 @@
 // 以前放在 Chromium 的 localStorage：關掉馬上重開時，舊程序的儲存服務還沒完全結束、資料庫被鎖住，
 // 新程序就開一個新的，上一次寫的進度整個不見。自己寫檔就不受這個影響。
 //
-// 另外在下載資料夾放一份備份：有使用者為了修黑畫面把 AppData 整個刪掉，觀看紀錄就沒了；
-// 下載資料夾放的是使用者的漫畫，不會跟著刪，下次開程式就從那裡還原。
+// 另外在程式資料夾（ComicHub.exe 旁邊的 backup，見 paths.js）放一份備份：有使用者為了修黑畫面把 AppData 整個刪掉，
+// 觀看紀錄就沒了；程式資料夾不會跟著刪，下次開程式就從那裡還原。
+// （v1.0.23～1.0.26 的備份放在 Windows 的「下載」資料夾，使用者不希望放那裡：只拿來還原，寫好新備份後刪掉）
 const { app, ipcMain } = require('electron')
 const fs = require('original-fs')
 const os = require('os')
 const path = require('path')
+const paths = require('./paths')
 
 const file = () => path.join(app.getPath('userData'), 'state.json')
 const BACKUP_NAME = 'ComicHub 紀錄備份.json'
@@ -16,14 +18,22 @@ let timer = null
 let backupTimer = null
 let lastBackup = 0
 
-/** 備份放在下載資料夾：目前設定的那個 + 預設的那個（AppData 刪掉後設定也沒了，只找得到預設的） */
+/** 現在的備份位置（程式資料夾 / backup） */
 function backupFiles() {
-  const dirs = new Set([path.join(app.getPath('downloads'), 'ComicHub')])
+  return [path.join(paths.backupDir(), BACKUP_NAME)]
+}
+
+/** 舊版放在下載資料夾的備份：Windows「下載\ComicHub」和目前設定的下載資料夾 */
+function legacyBackupFiles() {
+  const dirs = new Set([paths.legacyDownloadDir()])
   try {
     dirs.add(require('./downloads').dir())
   } catch {}
-  return [...dirs].map((d) => path.join(d, BACKUP_NAME))
+  return [...dirs].map((d) => path.join(d, BACKUP_NAME)).filter((f) => !backupFiles().includes(f))
 }
+
+/** 所有可能的備份（還原、或黑畫面時要放一旁的都看這個） */
+const allBackupFiles = () => [...backupFiles(), ...legacyBackupFiles()]
 
 function readJson(f) {
   return JSON.parse(fs.readFileSync(f, 'utf8'))
@@ -37,8 +47,8 @@ function load() {
       return data
     } catch {}
   }
-  // userData 裡完全沒有（被刪掉了）→ 從下載資料夾的備份還原
-  for (const f of backupFiles()) {
+  // userData 裡完全沒有（被刪掉了）→ 從備份還原（先找程式資料夾的，再找舊版放在下載資料夾的）
+  for (const f of allBackupFiles()) {
     try {
       data = readJson(f)
       data._restoredFrom = f
@@ -81,12 +91,25 @@ function writeBackup() {
   if (!data) return
   const { _restoredFrom, ...rest } = data
   const text = JSON.stringify({ ...rest, _backupAt: new Date().toISOString(), _host: os.hostname() })
+  let written = false
   for (const f of backupFiles()) {
     try {
       fs.mkdirSync(path.dirname(f), { recursive: true })
       fs.writeFileSync(f + '.tmp', text)
       fs.renameSync(f + '.tmp', f)
+      written = true
     } catch {}
+  }
+  // 新備份寫好了，舊版放在下載資料夾的那份就刪掉（使用者不希望放那裡）
+  if (written) {
+    for (const f of legacyBackupFiles()) {
+      try {
+        if (fs.existsSync(f)) {
+          fs.rmSync(f, { force: true })
+          require('./watchdog').log(`moved backup out of download folder: ${f}`)
+        }
+      } catch {}
+    }
   }
 }
 
@@ -109,4 +132,4 @@ function setup() {
   app.on('will-quit', finalFlush)
 }
 
-module.exports = { setup, flush, backupFiles }
+module.exports = { setup, flush, backupFiles, allBackupFiles }

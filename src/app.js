@@ -2290,10 +2290,10 @@ const startup = () => {
   step('search', setupSearch)
   step('check update', () => checkUpdate())
   step("what's new", () => showWhatsNew())
-  // 資料夾被刪掉後，從下載資料夾的備份把紀錄救回來了
+  // 資料夾被刪掉後，從程式資料夾的備份把紀錄救回來了
   step('restore notice', () => {
     if (store.get('_restoredFrom')) {
-      toast('已從下載資料夾的備份還原觀看紀錄和設定')
+      toast('已從備份還原觀看紀錄和設定')
       store.set('_restoredFrom', null)
     }
   })

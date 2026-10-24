@@ -1,2 +1,5 @@
 node_modules/
 dist/
+# 開發時的漫畫和紀錄備份（paths.js：程式資料夾）
+/downloads/
+/backup/

@@ -1,7 +1,7 @@
 // 啟動自我檢查：主畫面一直沒載好（黑畫面）時自己想辦法，不要讓使用者卡在一片黑。
 //   1. 畫面程序當掉、載入失敗、或 20 秒內沒回報「載好了」→ 重新載入一次
 //   2. 還是不行 → 改用「不用顯示卡加速」重開（顯示卡驅動造成的黑畫面很常見）
-//   3. 還是不行 → 把 ComicHub 自己的資料（state.json 和下載資料夾的備份）改名放旁邊（不刪），用空白資料重開
+//   3. 還是不行 → 把 ComicHub 自己的資料（state.json 和它的備份）改名放旁邊（不刪），用空白資料重開
 //      （有使用者把 AppData 全刪才好，代表可能是資料裡某個值讓畫面起不來）
 //   4. 連這樣都不行 → 顯示說明頁，教使用者重新下載安裝
 // 每一步都寫進 userData/startup.log，使用者回報問題時可以看。
@@ -44,7 +44,7 @@ function readRecovery() {
   }
 }
 
-/** 把 state.json（含 .bak）和下載資料夾裡的備份改名放旁邊，下次用空白資料開；原檔都留著 */
+/** 把 state.json（含 .bak）和備份（程式資料夾 / 舊版的下載資料夾）改名放旁邊，下次用空白資料開；原檔都留著 */
 function setDataAside() {
   const stamp = localTime().slice(0, 19).replace(/[: ]/g, '-')
   const moved = []
@@ -59,7 +59,7 @@ function setDataAside() {
   mv(file('state.json'))
   mv(file('state.json.bak'))
   try {
-    for (const f of require('./state').backupFiles()) mv(f)
+    for (const f of require('./state').allBackupFiles()) mv(f)
   } catch {}
   try {
     fs.writeFileSync(file('recovery.json'), JSON.stringify({ dataSetAside: new Date().toISOString(), files: moved, notified: false }, null, 2))

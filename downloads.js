@@ -3,12 +3,30 @@ const { app, dialog, ipcMain, shell } = require('electron')
 const fs = require('fs')
 const path = require('path')
 const fetcher = require('./fetcher')
+const paths = require('./paths')
 
 const settingsFile = () => path.join(app.getPath('userData'), 'downloads.json')
 let settings = {}
 
+/** 下載資料夾：使用者自己選的 > 程式資料夾裡的 downloads（以前預設是 Windows 的「下載\ComicHub」） */
 function dir() {
-  return settings.dir || path.join(app.getPath('downloads'), 'ComicHub')
+  return settings.dir || paths.defaultDownloadDir()
+}
+
+/**
+ * 舊版預設把漫畫存在 Windows 的「下載\ComicHub」。已經有漫畫在那裡的人繼續用那裡（記成使用者設定），
+ * 不然改了預設之後漫畫會像是不見了；新安裝的才用新的預設位置。漫畫檔案不會被搬動。
+ */
+function keepLegacyDir(save) {
+  if (settings.dir) return
+  const legacy = paths.legacyDownloadDir()
+  try {
+    if (fs.readdirSync(legacy).some((n) => /.(cbz|zip)$/i.test(n))) {
+      settings.dir = legacy
+      settings.keptLegacy = true
+      save()
+    }
+  } catch {}
 }
 
 // ---------- 極簡 zip 寫入器 ----------
@@ -137,6 +155,7 @@ function setup() {
     settings = {}
   }
   const save = () => fs.writeFileSync(settingsFile(), JSON.stringify(settings, null, 2))
+  keepLegacyDir(save)
 
   ipcMain.handle('dl:dir', () => dir())
   ipcMain.handle('dl:chooseDir', async (e) => {
