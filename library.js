@@ -130,17 +130,70 @@ function summary(b) {
   }
 }
 
-async function listDir(dir) {
-  let names = []
+async function scanDir(dir) {
   try {
-    names = await fs.promises.readdir(dir)
+    return (await fs.promises.readdir(dir)).filter((n) => /\.(cbz|zip)$/i.test(n)).map((n) => path.join(dir, n))
   } catch {
     return []
   }
+}
+
+// ---------- 書櫃記住哪些檔案 ----------
+// 以前書櫃只看「目前的下載資料夾」，用「開啟漫畫檔」加進來的只存在記憶體，
+// 換資料夾、重開程式（例如手動覆蓋新版）後就得重新加。現在把用過的資料夾和加過的檔案都記在 library.json。
+
+const indexFile = () => path.join(app.getPath('userData'), 'library.json')
+let index = null
+function loadIndex() {
+  if (index) return index
+  try {
+    index = JSON.parse(fs.readFileSync(indexFile(), 'utf8'))
+  } catch {
+    index = {}
+  }
+  index.dirs ||= []
+  index.files ||= []
+  return index
+}
+function saveIndex() {
+  try {
+    fs.writeFileSync(indexFile(), JSON.stringify(index, null, 2))
+  } catch {}
+}
+const samePath = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
+function remember(kind, p) {
+  const idx = loadIndex()
+  if (idx[kind].some((x) => samePath(x, p))) return
+  idx[kind].push(path.resolve(p))
+  saveIndex()
+}
+function forget(file) {
+  const idx = loadIndex()
+  idx.files = idx.files.filter((x) => !samePath(x, file))
+  saveIndex()
+}
+
+/** 目前的下載資料夾 + 以前用過的下載資料夾 + 個別加進來的檔案 */
+async function listAll(currentDir) {
+  remember('dirs', currentDir)
+  const idx = loadIndex()
+  const files = []
+  for (const d of idx.dirs) files.push(...(await scanDir(d)))
+  for (const f of idx.files) if (fs.existsSync(f)) files.push(f)
+  const seen = new Set()
+  const unique = files.filter((f) => {
+    const k = path.resolve(f).toLowerCase()
+    if (seen.has(k)) return false
+    seen.add(k)
+    return true
+  })
+  return listFiles(unique)
+}
+
+async function listFiles(files) {
   const out = []
-  for (const n of names) {
-    if (!/\.(cbz|zip)$/i.test(n)) continue
-    const file = path.join(dir, n)
+  for (const file of files) {
+    const n = path.basename(file)
     try {
       out.push(summary(await loadBook(file)))
     } catch (err) {
@@ -171,10 +224,12 @@ function setup(getDir) {
     }
   })
 
-  ipcMain.handle('lib:list', () => listDir(getDir()))
+  ipcMain.handle('lib:list', () => listAll(getDir()))
   ipcMain.handle('lib:open', async (_e, file) => {
     try {
-      return { ok: true, book: summary(await loadBook(file)) }
+      const book = summary(await loadBook(file))
+      remember('files', file)
+      return { ok: true, book }
     } catch (err) {
       return { ok: false, error: err.message }
     }
@@ -191,6 +246,7 @@ function setup(getDir) {
     for (const f of r.filePaths) {
       try {
         out.push(summary(await loadBook(f)))
+        remember('files', f)
       } catch (err) {
         out.push({ error: `${path.basename(f)}：${err.message}` })
       }
@@ -202,11 +258,18 @@ function setup(getDir) {
     try {
       await shell.trashItem(file)
       books.delete(idOf(file))
+      forget(file)
       return { ok: true }
     } catch (err) {
       return { ok: false, error: err.message }
     }
   })
+  // 只從書櫃拿掉（不刪檔），給用「開啟漫畫檔」加進來的外部檔案用
+  ipcMain.handle('lib:forget', (_e, file) => {
+    forget(file)
+    return { ok: true }
+  })
+  ipcMain.handle('lib:external', (_e, file) => !loadIndex().dirs.some((d) => samePath(path.dirname(file), d)))
 }
 
-module.exports = { setup }
+module.exports = { setup, remember }

@@ -944,6 +944,28 @@ function bookPopup(b, reload) {
       '刪除',
     ),
   )
+  // 用「開啟漫畫檔」加進來、不在下載資料夾的檔案：可以只從書櫃拿掉，不刪檔
+  window.hub.lib.external(b.file).then((ext) => {
+    if (!ext) return
+    actions.append(
+      h(
+        'button',
+        {
+          class: 'btn',
+          title: '檔案留在原處，只是不再顯示在書櫃',
+          onclick: async () => {
+            await window.hub.lib.forget(b.file)
+            const i = openedBooks.findIndex((x) => x.id === b.id)
+            if (i >= 0) openedBooks.splice(i, 1)
+            closeDetail()
+            toast('已從書櫃移除（檔案沒有刪除）')
+            reload()
+          },
+        },
+        '從書櫃移除',
+      ),
+    )
+  })
 
   const info = [
     b.pageCount ? ['頁數', `${b.pageCount}`] : null,

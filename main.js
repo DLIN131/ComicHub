@@ -73,6 +73,28 @@ function openSiteWindow(site, url, { login = false } = {}) {
       if (fetcher.siteForUrl(u) === site) win.loadURL(u)
       return { action: 'deny' }
     })
+    // jm 站一進來就跳整頁廣告公告，蓋住登入表單，直接藏起來
+    if (site === 'jm') {
+      win.webContents.on('dom-ready', () => {
+        win.webContents
+          .insertCSS(
+            '#outsidenoticeModal,#shunt-modal,#billboard-modal,#bouns-popup,#guide-modal,#headelikes_modal,.modal-backdrop{display:none!important}' +
+              'body.modal-open{overflow:auto!important;padding-right:0!important}',
+          )
+          .catch(() => {})
+      })
+    }
+    // 登入成功（網站跳離登入頁）就自動關窗，使用者才知道成功了
+    if (login) {
+      let checking = false
+      win.webContents.on('did-navigate', async (_e, u) => {
+        if (checking || /login/i.test(u)) return
+        checking = true
+        const s = await fetcher.authStatus(site).catch(() => ({ loggedIn: false }))
+        checking = false
+        if (s.loggedIn && !win.isDestroyed()) win.close()
+      })
+    }
     win.loadURL(url)
     win.on('closed', () => resolve())
   })

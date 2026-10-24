@@ -253,11 +253,18 @@ async function authStatus(site) {
     return { loggedIn: true, name: r.data.username || r.data.name || '' }
   }
   if (site === 'jm') {
-    const r = await get('jm', '/')
+    // 「我的」頁 /user/：沒登入會被導到 /login，登入後是自己的頁面（網址或頁面裡有 /user/<帳號>）
+    const r = await get('jm', '/user/')
     if (!r.ok) return { loggedIn: false, error: r.error }
-    // 未登入時「我的」連到 /user/，登入後會變成 /user/<帳號>
-    const m = r.data.match(/href="\/user\/([^"/?#]+)\/?"\s*>\s*<i class="fas fa-user-circle/)
-    return m ? { loggedIn: true, name: decodeURIComponent(m[1]) } : { loggedIn: false }
+    const html = r.data
+    const loginPage = /\/login(?:[/?#]|$)/.test(r.url || '') || /<title>\s*Login\b/i.test(html)
+    if (loginPage) return { loggedIn: false }
+    const fromUrl = (String(r.url || '').match(/\/user\/([^/?#]+)/) || [])[1]
+    const fromMenu =
+      (html.match(/href="(?:https?:\/\/[^/"]+)?\/user\/([^"/?#]+)\/?"[^>]*>\s*<i class="fas? fa-user-circle/) || [])[1] ||
+      (html.match(/class="user-text"[^>]*>\s*([^<]+?)\s*</) || [])[1]
+    const name = decodeURIComponent(fromUrl || (fromMenu && !/登錄|註冊|登入/.test(fromMenu) ? fromMenu : '') || '')
+    return { loggedIn: true, name }
   }
   if (site === 'wn') {
     const r = await get('wn', '/users.html')
