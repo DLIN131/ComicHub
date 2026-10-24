@@ -1,5 +1,6 @@
 import { SITES, SITE_KEYS, LANGS, setLangFilter, loadConfig, getConfig } from './sites.js'
 import * as dl from './downloader.js'
+import { store } from './store.js'
 
 const $ = (s, el = document) => el.querySelector(s)
 const view = $('#view')
@@ -16,22 +17,6 @@ const h = (tag, attrs = {}, ...kids) => {
   return el
 }
 
-// ---------- 本機儲存 ----------
-
-const store = {
-  get(k, d) {
-    try {
-      return JSON.parse(localStorage.getItem(k)) ?? d
-    } catch {
-      return d
-    }
-  },
-  set(k, v) {
-    try {
-      localStorage.setItem(k, JSON.stringify(v))
-    } catch {}
-  },
-}
 
 // ---------- 閱讀進度（看到哪一話、哪一頁） ----------
 
@@ -43,7 +28,7 @@ const progressText = (p) => (p ? `${p.chapterTitle ? `${p.chapterTitle} ` : ''}�
 function saveProgress(key, data, histItem) {
   const all = store.get('progress', {})
   all[key] = { ...data, time: Date.now() }
-  // 只留最近 1000 本，免得 localStorage 越長越大
+  // 只留最近 1000 本，免得存檔越長越大
   const keys = Object.keys(all)
   if (keys.length > 1000) keys.sort((a, b) => all[a].time - all[b].time).slice(0, keys.length - 1000).forEach((k) => delete all[k])
   store.set('progress', all)

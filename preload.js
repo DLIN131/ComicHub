@@ -12,6 +12,11 @@ contextBridge.exposeInMainWorld('updater', {
 })
 
 contextBridge.exposeInMainWorld('hub', {
+  // 程式資料（進度、紀錄、設定…）存在主程序的 state.json；讀取一次拿全部，之後寫入只送變動
+  state: {
+    all: () => ipcRenderer.sendSync('state:all'),
+    set: (key, value) => ipcRenderer.send('state:set', key, value),
+  },
   get: (site, url, opts) => ipcRenderer.invoke('net:get', site, url, opts),
   config: () => ipcRenderer.invoke('site:config'),
   setBase: (site, base) => ipcRenderer.invoke('site:setBase', site, base),

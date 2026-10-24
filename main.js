@@ -4,6 +4,7 @@ const fetcher = require('./fetcher')
 const downloads = require('./downloads')
 const updater = require('./updater')
 const library = require('./library')
+const state = require('./state')
 
 // 各站共用一般 Chrome 的 UA，Cloudflare 對 Electron 字樣的 UA 比較容易擋
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
@@ -191,6 +192,7 @@ if (!app.requestSingleInstanceLock()) {
 
 app.whenReady().then(() => {
   if (!app.hasSingleInstanceLock()) return
+  state.setup()
   fetcher.init(UA)
   setupImageHeaders()
   setupIpc()

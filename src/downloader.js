@@ -1,5 +1,6 @@
 // 下載佇列：一次下載一本，每本同時抓 4 張圖，邊抓邊交給主程序寫進 .cbz
 import { SITES, getConfig } from './sites.js'
+import { store } from './store.js'
 
 const CONCURRENCY = 4
 const listeners = new Set()
@@ -7,18 +8,15 @@ const jobs = loadDone()
 let running = false
 
 function loadDone() {
-  try {
-    return (JSON.parse(localStorage.getItem('downloads')) || []).filter((j) => j.status === 'done')
-  } catch {
-    return []
-  }
+  return (store.get('downloads', []) || []).filter((j) => j.status === 'done')
 }
 
 function persist() {
-  try {
-    const done = jobs.filter((j) => j.status === 'done').slice(0, 300)
-    localStorage.setItem('downloads', JSON.stringify(done.map(({ d, ...rest }) => rest)))
-  } catch {}
+  const done = jobs.filter((j) => j.status === 'done').slice(0, 300)
+  store.set(
+    'downloads',
+    done.map(({ d, ...rest }) => rest),
+  )
 }
 
 function emit() {
