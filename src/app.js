@@ -1547,9 +1547,12 @@ const versionText = () => (Number(window.APP_VERSION) ? `v1.0.${Number(window.AP
 // ---------- 更新紀錄（change log） ----------
 
 /** 從 GitHub 的發布說明拿每一版的內容；抓不到（離線）就用上次存的 */
-async function fetchChangelog() {
+async function fetchChangelog(timeoutMs = 8000) {
+  // 連不到 GitHub（被擋、網路慢）時不要一直等，逾時就用上次存的
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
   try {
-    const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=100`, { headers: { Accept: 'application/vnd.github+json' } })
+    const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=100`, { headers: { Accept: 'application/vnd.github+json' }, signal: ctrl.signal })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const list = (await res.json())
       .map((r) => {
@@ -1568,17 +1571,22 @@ async function fetchChangelog() {
     return list
   } catch {
     return store.get('changelog', [])
+  } finally {
+    clearTimeout(timer)
   }
 }
 
 /** 更新紀錄視窗；since 有值時只顯示比它新的版本（剛更新完用） */
-async function showChangelog({ since = 0, title = '更新紀錄' } = {}) {
+async function showChangelog({ since = 0, title = '更新紀錄', list: preloaded = null } = {}) {
   const box = h('div', { class: 'detail-box changelog' }, h('button', { class: 'close', onclick: closeDetail, title: '關閉 (Esc)' }, '×'), h('h2', {}, title), loading())
   detailToken++
   detailEl.replaceChildren(box)
   detailEl.classList.remove('hidden')
   detailEl.scrollTop = 0
-  const list = (await fetchChangelog()).filter((r) => r.code > since)
+  const myToken = detailToken
+  const list = (preloaded || (await fetchChangelog())).filter((r) => r.code > since)
+  // 等的時候使用者已經關掉或開了別的視窗，就不要蓋回去
+  if (myToken !== detailToken) return
   const current = Number(window.APP_VERSION) || 0
   box.lastChild.replaceWith(
     list.length
@@ -1600,13 +1608,18 @@ async function showChangelog({ since = 0, title = '更新紀錄' } = {}) {
 }
 
 /** 更新後第一次開：自動顯示這次更新了什麼（從上次用的版本之後的每一版） */
-function showWhatsNew() {
+async function showWhatsNew() {
   const current = Number(window.APP_VERSION) || 0
   if (!current) return
   const seen = store.get('lastSeenVersion', 0)
   store.set('lastSeenVersion', current)
-  // 第一次用有這個功能的版本（還沒記過）就只秀這一版
-  if (!seen || seen < current) showChangelog({ since: seen || current - 1, title: `已更新到 v1.0.${current}` })
+  // 全新安裝不跳；真的更新過才跳
+  if (!seen || seen >= current) return
+  // 先在背景讀好，讀到了才跳出來；6 秒讀不到就算了。
+  // 以前是一開程式就先蓋一層半透明黑幕 + 載入中，連不到 GitHub 時就一直卡著，看起來像黑畫面
+  const list = (await fetchChangelog(6000)).filter((r) => r.code > seen)
+  if (!list.length || !detailEl.classList.contains('hidden') || !readerEl.classList.contains('hidden')) return
+  showChangelog({ since: seen, title: `已更新到 v1.0.${current}`, list })
 }
 
 /**
@@ -1797,6 +1810,8 @@ loadConfig().then(() => {
   setupSearch()
   checkUpdate()
   showWhatsNew()
+  // 告訴主程序畫面載好了（沒回報的話會自動重載，避免黑畫面卡住）
+  window.hub.ready()
   pages.home()
 })
 

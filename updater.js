@@ -114,11 +114,29 @@ function setup() {
     fs.writeFileSync(script, [
       '$log = $env:AP_LOG',
       '"start $(Get-Date -Format o)" | Set-Content -LiteralPath $log',
-      'Wait-Process -Id ([int]$env:AP_PID) -ErrorAction SilentlyContinue',
-      'Start-Sleep -Milliseconds 500',
+      'Wait-Process -Id ([int]$env:AP_PID) -Timeout 60 -ErrorAction SilentlyContinue',
       '"app exited $(Get-Date -Format o)" | Add-Content -LiteralPath $log',
-      '& robocopy.exe $env:AP_SRC $env:AP_DST /E /R:10 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null',
-      '"robocopy $LASTEXITCODE $(Get-Date -Format o)" | Add-Content -LiteralPath $log',
+      // 主程式結束後，顯示卡、畫面那些子程序還會多留幾秒、開著程式檔；全部結束才覆蓋，
+      // 不然 app.asar 會換不掉（新舊檔案混在一起 → 開起來黑畫面）
+      '$dst = $env:AP_DST.TrimEnd([char]92)',
+      '$left = $null',
+      'for ($i = 0; $i -lt 60; $i++) {',
+      '  $left = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -like ($dst + [char]92 + "*") }',
+      '  if (-not $left) { break }',
+      '  Start-Sleep -Seconds 1',
+      '}',
+      'if ($left) { "force closing $($left.Count) leftover processes" | Add-Content -LiteralPath $log; $left | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2 }',
+      // 複製完確認主程式檔（app.asar）真的換成新的；沒有就再試
+      '$srcAsar = Join-Path $env:AP_SRC "resources\\app.asar"',
+      '$dstAsar = Join-Path $dst "resources\\app.asar"',
+      'for ($try = 1; $try -le 3; $try++) {',
+      '  & robocopy.exe $env:AP_SRC $env:AP_DST /E /R:5 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null',
+      '  $rc = $LASTEXITCODE',
+      '  $ok = ($rc -lt 8) -and ((Get-FileHash -LiteralPath $srcAsar).Hash -eq (Get-FileHash -LiteralPath $dstAsar -ErrorAction SilentlyContinue).Hash)',
+      '  "robocopy try $try exit $rc verified $ok $(Get-Date -Format o)" | Add-Content -LiteralPath $log',
+      '  if ($ok) { break }',
+      '  Start-Sleep -Seconds 3',
+      '}',
       'Start-Process -FilePath $env:AP_EXE -WorkingDirectory $env:AP_DST',
       '',
     ].join('\r\n'), 'ascii')
@@ -136,7 +154,8 @@ function setup() {
         AP_SRC: extracted,
         AP_DST: installDir,
         AP_EXE: exe,
-        AP_LOG: path.join(work, 'update.log'),
+        // 記錄放在 userData（暫存資料夾下次啟動會被清掉），回報問題時查得到
+        AP_LOG: path.join(app.getPath('userData'), 'update.log'),
       },
     }).unref()
     setTimeout(() => app.quit(), 300)

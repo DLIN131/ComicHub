@@ -5,6 +5,7 @@ const downloads = require('./downloads')
 const updater = require('./updater')
 const library = require('./library')
 const state = require('./state')
+const watchdog = require('./watchdog')
 
 // 各站共用一般 Chrome 的 UA，Cloudflare 對 Electron 字樣的 UA 比較容易擋
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
@@ -13,6 +14,12 @@ app.userAgentFallback = UA
 // 不把看過的圖片 / 網頁存到磁碟快取：不關的話 userData 和各站 partition 的 Cache 會越看越大（看一陣子就上百 MB）。
 // 同一次執行裡圖片還是有記憶體快取，往回捲不會重抓。（在回應加 Cache-Control 沒用，要用這個開關，見 AniPlay 的經驗）
 app.commandLine.appendSwitch('disable-http-cache')
+
+// 之前黑畫面過就關掉顯示卡加速（見 watchdog.js）
+watchdog.beforeReady()
+
+// 資料檔的讀寫一開始就要能用：頁面一載入就同步讀取，handler 不在的話頁面會整個卡住
+state.setup()
 
 /**
  * 刪掉以前留下的快取資料夾（網頁快取、腳本快取、GPU 快取）。
@@ -51,6 +58,7 @@ function createWindow() {
     },
   })
   mainWin.removeMenu()
+  watchdog.watch(mainWin)
   mainWin.loadFile(path.join(__dirname, 'src', 'index.html'))
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
@@ -192,7 +200,6 @@ if (!app.requestSingleInstanceLock()) {
 
 app.whenReady().then(() => {
   if (!app.hasSingleInstanceLock()) return
-  state.setup()
   fetcher.init(UA)
   setupImageHeaders()
   setupIpc()

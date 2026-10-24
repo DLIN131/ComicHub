@@ -11,7 +11,12 @@ contextBridge.exposeInMainWorld('updater', {
   install: () => ipcRenderer.invoke('update:install'),
 })
 
+// 頁面載好時回報主程序（主程序在等，太久沒回報會自動重載，見 watchdog.js）；頁面錯誤也記到 startup.log
+window.addEventListener('error', (e) => ipcRenderer.send('app:error', `${e.message} @ ${e.filename}:${e.lineno}`))
+window.addEventListener('unhandledrejection', (e) => ipcRenderer.send('app:error', `unhandled: ${e.reason?.message || e.reason}`))
+
 contextBridge.exposeInMainWorld('hub', {
+  ready: () => ipcRenderer.send('app:ready'),
   // 程式資料（進度、紀錄、設定…）存在主程序的 state.json；讀取一次拿全部，之後寫入只送變動
   state: {
     all: () => ipcRenderer.sendSync('state:all'),
