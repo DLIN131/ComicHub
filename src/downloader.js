@@ -7,12 +7,15 @@ const listeners = new Set()
 const jobs = loadDone()
 let running = false
 
+// 完成和失敗的都留著（失敗的才查得到原因）；下載中的關程式就沒了，不留
+const KEEP = ['done', 'error']
+
 function loadDone() {
-  return (store.get('downloads', []) || []).filter((j) => j.status === 'done')
+  return (store.get('downloads', []) || []).filter((j) => KEEP.includes(j.status))
 }
 
 function persist() {
-  const done = jobs.filter((j) => j.status === 'done').slice(0, 300)
+  const done = jobs.filter((j) => KEEP.includes(j.status)).slice(0, 300)
   store.set(
     'downloads',
     done.map(({ d, ...rest }) => rest),

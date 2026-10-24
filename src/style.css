@@ -1029,3 +1029,24 @@ main {
 .account .st.warn {
   color: #ffb347;
 }
+
+/* 下載頁：資料夾裡的漫畫 */
+.dl-sub {
+  margin: 26px 0 12px;
+  font-size: 16px;
+}
+
+/* 視窗太窄時，搜尋列換到第二行，不要把整頁撐寬（右邊的字會被切掉） */
+@media (max-width: 1250px) {
+  .topbar {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .search {
+    margin-left: 0;
+    flex: 1 1 100%;
+  }
+}
+body {
+  overflow-x: hidden;
+}

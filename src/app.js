@@ -448,16 +448,55 @@ const pages = {
         error: `失敗：${j.error}`,
         canceled: '已取消',
       })[j.status]
+    // 資料夾裡有、但沒有下載紀錄的漫畫（舊版下載的、自己放進來的）
+    const folderBox = h('div')
+    const renderFolder = async () => {
+      const [dir, books] = await Promise.all([window.hub.dl.dir(), window.hub.lib.list()])
+      if (currentNav !== 'downloads') return
+      const norm = (p) => String(p || '').toLowerCase().replace(/\//g, '\\')
+      const tracked = new Set(dl.allJobs().filter((j) => j.file).map((j) => norm(j.file)))
+      const inDir = books.filter((b) => norm(b.file).startsWith(norm(dir) + '\\') && !tracked.has(norm(b.file)))
+      if (!inDir.length) return folderBox.replaceChildren()
+      folderBox.replaceChildren(
+        h('h3', { class: 'dl-sub' }, `下載資料夾裡的漫畫（${inDir.length}）`),
+        h(
+          'div',
+          { class: 'dl-list' },
+          inDir.map((b) => {
+            const site = siteOfLocal(b)
+            return h(
+              'div',
+              { class: `dl-item ${b.error ? 'error' : 'done'}` },
+              h('img', { src: b.cover || '', alt: '', onclick: () => !b.error && openLocal(b) }),
+              h(
+                'div',
+                { class: 'dl-body' },
+                h('div', { class: 'dl-title' }, site ? badge(site, true) : h('span', { class: 'badge local inline' }, b.source || '本機'), ' ', b.title, b.chapter ? h('span', { class: 'dl-ch' }, `　${b.chapter}`) : null),
+                h('div', { class: 'dl-st' }, b.error ? `無法讀取：${b.error}` : `${b.pageCount} 頁`),
+              ),
+              h(
+                'div',
+                { class: 'dl-btns' },
+                b.error ? null : h('button', { class: 'btn primary', onclick: () => openLocal(b) }, '閱讀'),
+                h('button', { class: 'btn', onclick: () => window.hub.dl.show(b.file) }, '在資料夾顯示'),
+              ),
+            )
+          }),
+        ),
+      )
+    }
     const render = () => {
       if (currentNav !== 'downloads') return off()
       const jobs = dl.allJobs()
-      if (!jobs.length) return list.replaceChildren(status('還沒有下載任何作品。在作品頁按「下載 CBZ」就會出現在這裡'))
+      if (!jobs.length) return list.replaceChildren(status('還沒有下載紀錄。在作品頁按「下載 CBZ」就會出現在這裡'))
       list.replaceChildren(
         ...jobs.map((j) => {
           const pct = j.status === 'done' ? 100 : j.total ? Math.round((j.done / j.total) * 100) : 0
           const btns = []
           if (j.status === 'queued' || j.status === 'running') btns.push(h('button', { class: 'btn', onclick: () => dl.cancel(j.key) }, '取消'))
           if ((j.status === 'error' || j.status === 'canceled') && j.d) btns.push(h('button', { class: 'btn', onclick: () => dl.retry(j.key) }, '重試'))
+          // 重開程式後的失敗紀錄沒有作品資料，開作品頁重新下載
+          else if (j.status === 'error') btns.push(h('button', { class: 'btn', onclick: () => openDetail({ site: j.site, id: j.id, title: j.title, cover: j.cover }) }, '開作品頁'))
           if (j.status === 'done' && j.file) {
             btns.push(h('button', { class: 'btn primary', onclick: () => openLocalFile(j.file) }, '閱讀'))
             btns.push(h('button', { class: 'btn', onclick: () => window.hub.dl.show(j.file) }, '在資料夾顯示'))
@@ -465,7 +504,7 @@ const pages = {
           return h(
             'div',
             { class: `dl-item ${j.status}` },
-            h('img', { src: j.cover || '', alt: '', onclick: () => openDetail({ site: j.site, id: j.id, title: j.title, cover: j.cover }) }),
+            h('img', { src: j.cover || '', alt: '', onerror: (e) => (e.target.style.visibility = 'hidden'), onclick: () => openDetail({ site: j.site, id: j.id, title: j.title, cover: j.cover }) }),
             h(
               'div',
               { class: 'dl-body' },
@@ -478,20 +517,41 @@ const pages = {
         }),
       )
     }
-    const off = dl.onChange(render)
+    // 有下載完成就順便重整「資料夾裡的漫畫」
+    let doneCount = dl.allJobs().filter((j) => j.status === 'done').length
+    const off = dl.onChange((jobs) => {
+      render()
+      const n = jobs.filter((j) => j.status === 'done').length
+      if (n !== doneCount) {
+        doneCount = n
+        renderFolder()
+      }
+    })
     view.replaceChildren(
-      h('div', { class: 'section-head' }, h('h2', {}, '下載'), h('button', { class: 'more', onclick: () => dl.clearFinished() }, '清除已完成')),
+      h('div', { class: 'section-head' }, h('h2', {}, '下載'), h('button', { class: 'more', onclick: () => dl.clearFinished() }, '清除下載紀錄')),
       h(
         'div',
         { class: 'dl-head' },
         '儲存位置：',
         dirEl,
         h('button', { class: 'btn', onclick: () => window.hub.dl.openDir() }, '開啟資料夾'),
-        h('button', { class: 'btn', onclick: async () => (dirEl.textContent = await window.hub.dl.chooseDir()) }, '變更位置'),
+        h(
+          'button',
+          {
+            class: 'btn',
+            onclick: async () => {
+              dirEl.textContent = await window.hub.dl.chooseDir()
+              renderFolder()
+            },
+          },
+          '變更位置',
+        ),
       ),
       list,
+      folderBox,
     )
     render()
+    renderFolder()
   },
 
   account() {
@@ -1590,6 +1650,20 @@ function updateDlCount() {
   el.classList.toggle('hidden', !n)
 }
 dl.onChange(updateDlCount)
+
+// 下載完成 / 失敗時跳提示（不用一直盯著「下載」頁）
+const lastStatus = new Map(dl.allJobs().map((j) => [j.key, j.status]))
+dl.onChange((jobs) => {
+  for (const j of jobs) {
+    const before = lastStatus.get(j.key)
+    if (before !== j.status && (before === 'running' || before === 'queued')) {
+      const name = `${j.title}${j.chapterTitle ? ` ${j.chapterTitle}` : ''}`
+      if (j.status === 'done') toast(`下載完成：${name}`)
+      else if (j.status === 'error') toast(`下載失敗：${name}（${j.error}）`)
+    }
+    lastStatus.set(j.key, j.status)
+  }
+})
 
 loadConfig().then(() => {
   // 左上角顯示目前版本
