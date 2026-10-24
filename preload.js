@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('hub', {
   authStatus: (site) => ipcRenderer.invoke('auth:status', site),
   login: (site) => ipcRenderer.invoke('auth:login', site),
   logout: (site) => ipcRenderer.invoke('auth:logout', site),
+  setAccountName: (site, name) => ipcRenderer.invoke('auth:setName', site, name),
   openSite: (site, url) => ipcRenderer.invoke('site:open', site, url),
   external: (url) => ipcRenderer.invoke('shell:external', url),
   dl: {

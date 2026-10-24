@@ -84,6 +84,20 @@ function openSiteWindow(site, url, { login = false } = {}) {
           .catch(() => {})
       })
     }
+    // jm 站登入後的頁面讀不太到帳號名稱（收藏網址要用），所以記下使用者在登入表單打的帳號（只讀帳號欄，不碰密碼）
+    let typed = ''
+    let timer = null
+    if (login && site === 'jm') {
+      timer = setInterval(() => {
+        if (win.isDestroyed()) return
+        win.webContents
+          .executeJavaScript(`(document.querySelector('input[name="username"]') || {}).value || ''`)
+          .then((v) => {
+            if (v && v.trim()) typed = v.trim()
+          })
+          .catch(() => {})
+      }, 1000)
+    }
     // 登入成功（網站跳離登入頁）就自動關窗，使用者才知道成功了
     if (login) {
       let checking = false
@@ -96,7 +110,10 @@ function openSiteWindow(site, url, { login = false } = {}) {
       })
     }
     win.loadURL(url)
-    win.on('closed', () => resolve())
+    win.on('closed', () => {
+      clearInterval(timer)
+      resolve(typed)
+    })
   })
 }
 
@@ -107,9 +124,15 @@ function setupIpc() {
   ipcMain.handle('jm:reader', (_e, id) => fetcher.jmReader(id))
   ipcMain.handle('auth:status', (_e, site) => fetcher.authStatus(site))
   ipcMain.handle('auth:login', async (_e, site) => {
-    await openSiteWindow(site, fetcher.loginUrl(site), { login: true })
-    return fetcher.authStatus(site)
+    const typed = await openSiteWindow(site, fetcher.loginUrl(site), { login: true })
+    const s = await fetcher.authStatus(site)
+    if (s.loggedIn && !s.name && typed) {
+      fetcher.setAccountName(site, typed)
+      s.name = typed
+    }
+    return s
   })
+  ipcMain.handle('auth:setName', (_e, site, name) => fetcher.setAccountName(site, name))
   ipcMain.handle('auth:logout', (_e, site) => fetcher.logout(site))
   ipcMain.handle('site:open', (_e, site, url) => openSiteWindow(site, url))
   ipcMain.handle('shell:external', (_e, url) => shell.openExternal(url))

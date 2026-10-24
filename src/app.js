@@ -489,11 +489,13 @@ const pages = {
     const cards = SITE_KEYS.map((k) => {
       const st = h('div', { class: 'st' }, h('span', { class: 'spinner' }), ' 確認中…')
       const btns = h('div', { class: 'row2' })
+      const extra = h('div')
       const input = h('input', { value: cfg.sites[k].base, spellcheck: 'false' })
       const refresh = async () => {
         st.className = 'st'
         st.replaceChildren(h('span', { class: 'spinner' }), ' 確認中…')
         btns.replaceChildren()
+        extra.replaceChildren()
         const s = await window.hub.authStatus(k)
         if (s.loggedIn) {
           st.className = 'st ok'
@@ -514,6 +516,24 @@ const pages = {
               '登出',
             ),
           )
+          // jm 站收藏網址要用帳號名稱；自動讀不到時可以自己填
+          if (k === 'jm') {
+            const nameInput = h('input', { value: s.name || '', placeholder: '你的帳號名稱', spellcheck: 'false' })
+            const save = async () => {
+              const v = nameInput.value.trim()
+              await window.hub.setAccountName('jm', v)
+              SITES.jm.username = v
+              toast(v ? '已儲存帳號名稱' : '已清除帳號名稱')
+              refresh()
+            }
+            nameInput.onkeydown = (e) => {
+              if (e.key === 'Enter') save()
+            }
+            extra.replaceChildren(
+              h('label', {}, s.name ? '帳號名稱（讀取收藏用，不對可以改）' : '讀不到帳號名稱，請填你的帳號名稱才能讀取收藏'),
+              h('div', { class: 'domain' }, nameInput, h('button', { class: 'btn', onclick: save }, '儲存')),
+            )
+          }
         } else {
           st.textContent = s.error ? `未登入（${s.error}）` : '未登入'
           btns.append(
@@ -529,6 +549,7 @@ const pages = {
         h('h3', {}, badge(k, true), SITES[k].label),
         st,
         btns,
+        extra,
         h('label', {}, '網址（網站換網域時改這裡）'),
         h(
           'div',

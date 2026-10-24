@@ -258,7 +258,7 @@ const jm = {
       const s = await window.hub.authStatus('jm')
       if (!s.loggedIn) throw new Error('尚未登入')
       this.username = s.name
-      if (!this.username) throw new Error('已登入，但讀不到帳號名稱，暫時無法讀取收藏')
+      if (!this.username) throw new Error('已登入，但讀不到帳號名稱。請到「帳號」頁填寫你的帳號名稱，就能讀取收藏')
     }
     return this.list(html(await call('jm', `/user/${encodeURIComponent(this.username)}/favorite/albums?page=${page}`)), page)
   },

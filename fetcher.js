@@ -259,12 +259,7 @@ async function authStatus(site) {
     const html = r.data
     const loginPage = /\/login(?:[/?#]|$)/.test(r.url || '') || /<title>\s*Login\b/i.test(html)
     if (loginPage) return { loggedIn: false }
-    const fromUrl = (String(r.url || '').match(/\/user\/([^/?#]+)/) || [])[1]
-    const fromMenu =
-      (html.match(/href="(?:https?:\/\/[^/"]+)?\/user\/([^"/?#]+)\/?"[^>]*>\s*<i class="fas? fa-user-circle/) || [])[1] ||
-      (html.match(/class="user-text"[^>]*>\s*([^<]+?)\s*</) || [])[1]
-    const name = decodeURIComponent(fromUrl || (fromMenu && !/登錄|註冊|登入/.test(fromMenu) ? fromMenu : '') || '')
-    return { loggedIn: true, name }
+    return { loggedIn: true, name: accountName('jm') || jmNameFrom(r.url, html) }
   }
   if (site === 'wn') {
     const r = await get('wn', '/users.html')
@@ -285,6 +280,56 @@ async function authStatus(site) {
   return { loggedIn: false }
 }
 
+/**
+ * 從 jm 站「我的」頁找帳號名稱（沒有帳號可以實測，所以多試幾種寫法）：
+ * 網址 /user/<帳號> → 收藏分頁連結 /user/<帳號>/favorite → 選單「我的」→ 頁面上出現最多次的 /user/<帳號>
+ */
+function jmNameFrom(url, html) {
+  const dec = (s) => {
+    try {
+      return decodeURIComponent(s)
+    } catch {
+      return s
+    }
+  }
+  const fromUrl = (String(url || '').match(/\/user\/([^/?#]+)/) || [])[1]
+  if (fromUrl) return dec(fromUrl)
+  const fav = (html.match(/\/user\/([^"/?#\s]+)\/favorite/) || [])[1]
+  if (fav) return dec(fav)
+  const menu =
+    (html.match(/href="(?:https?:\/\/[^/"]+)?\/user\/([^"/?#]+)\/?"[^>]*>[\s\S]{0,200}?我的/) || [])[1] ||
+    (html.match(/href="(?:https?:\/\/[^/"]+)?\/user\/([^"/?#]+)\/?"[^>]*>\s*<i class="fas? fa-user-circle/) || [])[1]
+  if (menu) return dec(menu)
+  const count = {}
+  for (const m of html.matchAll(/href="(?:https?:\/\/[^/"]+)?\/user\/([^"/?#]+)(?:\/[^"]*)?"/g)) count[m[1]] = (count[m[1]] || 0) + 1
+  const top = Object.entries(count).sort((a, b) => b[1] - a[1])[0]
+  return top && top[1] >= 3 ? dec(top[0]) : ''
+}
+
+// ---------- 使用者自己設定 / 登入時記下的帳號名稱 ----------
+
+const accountsFile = () => path.join(app.getPath('userData'), 'accounts.json')
+let accounts = null
+function loadAccounts() {
+  if (!accounts) {
+    try {
+      accounts = JSON.parse(fs.readFileSync(accountsFile(), 'utf8'))
+    } catch {
+      accounts = {}
+    }
+  }
+  return accounts
+}
+const accountName = (site) => loadAccounts()[site]?.name || ''
+function setAccountName(site, name) {
+  const a = loadAccounts()
+  const v = String(name || '').trim()
+  if (v) a[site] = { name: v }
+  else delete a[site]
+  fs.writeFileSync(accountsFile(), JSON.stringify(a, null, 2))
+  return { ok: true }
+}
+
 /** eh 站的帳號在論壇子網域 */
 const forumUrl = (p) => base('eh').replace('://', '://forums.') + p
 
@@ -292,6 +337,7 @@ async function logout(site) {
   const ses = sesOf(site)
   if (site === 'nh') await ses.fetch(base('nh') + '/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {})
   await ses.clearStorageData()
+  setAccountName(site, '')
   return { loggedIn: false }
 }
 
@@ -329,4 +375,4 @@ async function jmReader(id) {
   return { ok: true, data: { aid, title: title.split('|')[0].trim(), pages } }
 }
 
-module.exports = { init, get, bytes, config, setBase, label, base, partition, loginUrl, siteForUrl, authStatus, logout, jmReader }
+module.exports = { init, get, bytes, config, setBase, label, base, partition, loginUrl, siteForUrl, authStatus, logout, jmReader, accountName, setAccountName }
