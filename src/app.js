@@ -1420,11 +1420,51 @@ function descramble(img, num) {
   return c
 }
 
+/** 滾輪一格大約捲的距離（Chromium 一格是 100px 左右） */
+const WHEEL_STEP = 100
+let wheelTarget = null
+let wheelFrame = 0
+
+/**
+ * 模擬滑鼠滾輪：目標位置往前加一段，再用動畫慢慢捲過去。
+ * 按住方向鍵時鍵盤會連續送 keydown，目標一直往前推，就會順順地一直捲（不會一格一格頓）。
+ */
+function stopWheel() {
+  cancelAnimationFrame(wheelFrame)
+  wheelFrame = 0
+  wheelTarget = null
+}
+
+function wheelScroll(delta) {
+  const max = readerEl.scrollHeight - readerEl.clientHeight
+  const from = wheelTarget ?? readerEl.scrollTop
+  wheelTarget = Math.max(0, Math.min(max, from + delta))
+  if (wheelFrame) return
+  const step = () => {
+    const cur = readerEl.scrollTop
+    const diff = wheelTarget - cur
+    if (Math.abs(diff) < 1) {
+      readerEl.scrollTop = wheelTarget
+      wheelTarget = null
+      wheelFrame = 0
+      return
+    }
+    // 每一格走剩下距離的 25%，前快後慢，跟滾輪的平滑捲動差不多
+    readerEl.scrollTop = cur + diff * 0.25
+    wheelFrame = requestAnimationFrame(step)
+  }
+  wheelFrame = requestAnimationFrame(step)
+}
+
+// 使用者自己用滑鼠捲動時，放掉鍵盤捲動的目標，免得被拉回去
+readerEl.addEventListener('wheel', stopWheel, { passive: true })
+
 /**
  * 方向鍵換頁：跳到下一頁 / 上一頁的頂端。
  * 比畫面還高的頁（條漫）先一段一段捲完，捲到底才換下一頁，免得跳過內容。
  */
 function turnPage(dir) {
+  stopWheel()
   const els = [...readerEl.querySelectorAll('.page')]
   if (!els.length) return
   const top = readerEl.scrollTop
@@ -1456,6 +1496,7 @@ function turnPage(dir) {
 }
 
 function closeReader() {
+  stopWheel()
   readerToken++
   observer?.disconnect()
   readerEl.onscroll = null
@@ -1688,10 +1729,14 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' || e.key === 'Backspace') closeReader()
     else if (e.key === '+' || e.key === '=') readerEl.querySelector('.reader-bar button[title^="放大"]').click()
     else if (e.key === '-') readerEl.querySelector('.reader-bar button[title^="縮小"]').click()
-    else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      // ↑↓ 跟滑鼠滾輪一樣：每按一下平滑捲一小段，按住就一直捲
+      e.preventDefault()
+      wheelScroll(e.key === 'ArrowDown' ? WHEEL_STEP : -WHEEL_STEP)
+    } else if (e.key === 'ArrowRight') {
       e.preventDefault()
       turnPage(1)
-    } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+    } else if (e.key === 'ArrowLeft') {
       e.preventDefault()
       turnPage(-1)
     } else if (e.key === 'PageDown' || e.key === ' ') {
