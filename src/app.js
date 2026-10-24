@@ -676,6 +676,7 @@ const pages = {
           },
           '檢查更新',
         ),
+        h('button', { class: 'btn', onclick: () => showChangelog() }, '更新紀錄'),
       ),
     )
   },
@@ -1502,6 +1503,71 @@ const ZIP_NAME = 'ComicHub-Windows.zip'
 /** 目前版本的文字；version.js 由 CI 寫入（APP_VERSION = run_number），本機開發是 0 */
 const versionText = () => (Number(window.APP_VERSION) ? `v1.0.${Number(window.APP_VERSION)}` : '開發版')
 
+// ---------- 更新紀錄（change log） ----------
+
+/** 從 GitHub 的發布說明拿每一版的內容；抓不到（離線）就用上次存的 */
+async function fetchChangelog() {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=100`, { headers: { Accept: 'application/vnd.github+json' } })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const list = (await res.json())
+      .map((r) => {
+        const code = Number(String(r.tag_name || '').split('.').pop()) || 0
+        // 發布說明：第一行是標題，下面是條列；--- 以下是固定的下載網址，Co-Authored-By 也不用給使用者看
+        const lines = String(r.body || '')
+          .split('\n---')[0]
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l && !l.startsWith('Co-Authored-By'))
+        return { code, date: (r.published_at || '').slice(0, 10), title: lines[0] || '', items: lines.slice(1).map((l) => l.replace(/^[-*•]\s*/, '')) }
+      })
+      .filter((r) => r.code)
+      .sort((a, b) => b.code - a.code)
+    store.set('changelog', list)
+    return list
+  } catch {
+    return store.get('changelog', [])
+  }
+}
+
+/** 更新紀錄視窗；since 有值時只顯示比它新的版本（剛更新完用） */
+async function showChangelog({ since = 0, title = '更新紀錄' } = {}) {
+  const box = h('div', { class: 'detail-box changelog' }, h('button', { class: 'close', onclick: closeDetail, title: '關閉 (Esc)' }, '×'), h('h2', {}, title), loading())
+  detailToken++
+  detailEl.replaceChildren(box)
+  detailEl.classList.remove('hidden')
+  detailEl.scrollTop = 0
+  const list = (await fetchChangelog()).filter((r) => r.code > since)
+  const current = Number(window.APP_VERSION) || 0
+  box.lastChild.replaceWith(
+    list.length
+      ? h(
+          'div',
+          { class: 'cl-list' },
+          list.map((r) =>
+            h(
+              'div',
+              { class: `cl-item${r.code === current ? ' current' : ''}` },
+              h('div', { class: 'cl-head' }, h('b', {}, `v1.0.${r.code}`), r.code === current ? h('span', { class: 'cl-now' }, '目前版本') : null, h('span', { class: 'cl-date' }, r.date)),
+              h('div', { class: 'cl-title' }, r.title),
+              r.items.length ? h('ul', {}, r.items.map((i) => h('li', {}, i))) : null,
+            ),
+          ),
+        )
+      : status('讀不到更新紀錄（第一次查看需要網路）'),
+  )
+}
+
+/** 更新後第一次開：自動顯示這次更新了什麼（從上次用的版本之後的每一版） */
+function showWhatsNew() {
+  const current = Number(window.APP_VERSION) || 0
+  if (!current) return
+  const seen = store.get('lastSeenVersion', 0)
+  store.set('lastSeenVersion', current)
+  // 第一次用有這個功能的版本（還沒記過）就只秀這一版
+  if (!seen || seen < current) showChangelog({ since: seen || current - 1, title: `已更新到 v1.0.${current}` })
+}
+
 /**
  * 檢查新版；有的話右下角跳更新提示。manual = 使用者自己按「檢查更新」（不管有沒有略過這版都顯示）。
  * 回傳 'dev' | 'latest' | 'shown' | 'error'
@@ -1667,12 +1733,27 @@ dl.onChange((jobs) => {
 
 loadConfig().then(() => {
   // 左上角顯示目前版本
-  $('.brand').append(h('span', { class: 'ver', title: '目前版本' }, versionText()))
+  $('.brand').append(
+    h(
+      'span',
+      {
+        class: 'ver',
+        title: '看更新紀錄',
+        onclick: (e) => {
+          // 版本字在 Logo 裡面，點它不要跳回首頁
+          e.stopPropagation()
+          showChangelog()
+        },
+      },
+      versionText(),
+    ),
+  )
   setupLang()
   setupSearch()
   checkUpdate()
+  showWhatsNew()
   pages.home()
 })
 
 // 測試用
-window.__app = { pages, openDetail, openReader, closeDetail, SITES, dl }
+window.__app = { pages, openDetail, openReader, closeDetail, SITES, dl, showChangelog, showWhatsNew }
