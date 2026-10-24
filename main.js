@@ -22,7 +22,7 @@ function removeOldCaches() {
   const ud = app.getPath('userData')
   const dirs = ['Cache', 'Code Cache', 'GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache'].map((n) => path.join(ud, n))
   try {
-    for (const p of ofs.readdirSync(path.join(ud, 'Partitions'))) for (const n of ['Cache', 'Code Cache', 'GPUCache']) dirs.push(path.join(ud, 'Partitions', p, n))
+    for (const p of ofs.readdirSync(path.join(ud, 'Partitions'))) for (const n of ['Cache', 'Code Cache', 'GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache']) dirs.push(path.join(ud, 'Partitions', p, n))
   } catch {}
   for (const d of dirs) {
     try {
