@@ -350,6 +350,13 @@ function loadAccounts() {
   return accounts
 }
 const accountName = (site) => loadAccounts()[site]?.name || ''
+/** 上次登入時打的帳號（下次登入視窗先幫忙填好；只記帳號，不記密碼） */
+const lastLogin = (site) => loadAccounts()[site]?.login || accountName(site)
+function setLastLogin(site, login) {
+  const a = loadAccounts()
+  a[site] = { ...a[site], login: String(login || '').trim() }
+  saveAccounts()
+}
 function saveAccounts() {
   try {
     fs.writeFileSync(accountsFile(), JSON.stringify(loadAccounts(), null, 2))
@@ -386,8 +393,11 @@ async function logout(site) {
   const ses = sesOf(site)
   if (site === 'nh') await ses.fetch(base('nh') + '/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {})
   await ses.clearStorageData()
-  // 自己登出的就不算「過期」，帳號名稱也一起清掉
-  delete loadAccounts()[site]
+  // 自己登出的就不算「過期」，帳號名稱也一起清掉；只留下次登入要預先填的帳號
+  const a = loadAccounts()
+  const login = a[site]?.login
+  delete a[site]
+  if (login) a[site] = { login }
   saveAccounts()
   return { loggedIn: false }
 }
@@ -426,4 +436,4 @@ async function jmReader(id) {
   return { ok: true, data: { aid, title: title.split('|')[0].trim(), pages } }
 }
 
-module.exports = { init, get, bytes, config, setBase, label, base, partition, loginUrl, siteForUrl, authStatus, logout, jmReader, accountName, setAccountName }
+module.exports = { init, get, bytes, config, setBase, label, base, partition, loginUrl, siteForUrl, authStatus, logout, jmReader, accountName, setAccountName, lastLogin, setLastLogin }

@@ -293,7 +293,7 @@ const pages = {
       if (currentNav !== 'favorites') return
       if (!st.loggedIn) {
         body.replaceChildren(
-          status(st.error ? `無法確認登入狀態：${st.error}` : st.expired ? `${SITES[site].label} 的登入已過期，請重新登入就能看到收藏` : `還沒登入${SITES[site].label}，登入後就能看到網站上的收藏`),
+          status(st.error ? `無法確認登入狀態：${st.error}` : st.expired ? expiredText(site) : `還沒登入${SITES[site].label}，登入後就能看到網站上的收藏`),
           h('div', { style: 'text-align:center' }, h('button', { class: 'btn primary', onclick: () => doLogin(site).then(() => pages.favorites(site)) }, `登入 ${SITES[site].label}`)),
         )
         return
@@ -535,7 +535,7 @@ const pages = {
             )
           }
         } else {
-          st.textContent = s.error ? `未登入（${s.error}）` : s.expired ? '登入已過期，請重新登入' : '未登入'
+          st.textContent = s.error ? `未登入（${s.error}）` : s.expired ? (k === 'jm' ? '登入已失效（可能在瀏覽器或手機登入過），請重新登入' : '登入已過期，請重新登入') : '未登入'
           if (s.expired) st.className = 'st warn'
           btns.append(
             h('button', { class: 'btn primary', onclick: () => doLogin(k).then(refresh) }, '登入'),
@@ -637,6 +637,13 @@ function parseIdQuery(q) {
   }
   if ((m = t.match(/^\d{1,8}$/))) return { sites: numbered, id: String(Number(m[0])), plain: true }
   return null
+}
+
+/** 登入失效的說明；jm 站同一個帳號只能在一個地方登入（實測：在瀏覽器登入後，這裡十幾秒內就被登出） */
+function expiredText(site) {
+  if (site === 'jm')
+    return `${SITES[site].label} 的登入已失效。這個站同一個帳號只能在一個地方保持登入，在瀏覽器或手機登入過就會把這裡登出，請重新登入就能看到收藏。（想在程式裡上網站，可以用「帳號」頁的「開啟網站」，它跟這裡共用登入）`
+  return `${SITES[site].label} 的登入已過期，請重新登入就能看到收藏`
 }
 
 async function doLogin(site) {
