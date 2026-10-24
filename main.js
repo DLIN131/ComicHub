@@ -13,7 +13,10 @@ app.userAgentFallback = UA
 // 同一次執行裡圖片還是有記憶體快取，往回捲不會重抓。（在回應加 Cache-Control 沒用，要用這個開關，見 AniPlay 的經驗）
 app.commandLine.appendSwitch('disable-http-cache')
 
-/** 刪掉以前留下的快取資料夾（網頁快取、腳本快取、GPU 快取），程式啟動時清一次 */
+/**
+ * 刪掉以前留下的快取資料夾（網頁快取、腳本快取、GPU 快取）。
+ * 一定要在 app ready 之前做：ready 之後 Chromium 已經開著這些檔案，Windows 上刪不掉。
+ */
 function removeOldCaches() {
   const ofs = require('original-fs')
   const ud = app.getPath('userData')
@@ -21,7 +24,11 @@ function removeOldCaches() {
   try {
     for (const p of ofs.readdirSync(path.join(ud, 'Partitions'))) for (const n of ['Cache', 'Code Cache', 'GPUCache']) dirs.push(path.join(ud, 'Partitions', p, n))
   } catch {}
-  for (const d of dirs) ofs.rm(d, { recursive: true, force: true }, () => {})
+  for (const d of dirs) {
+    try {
+      ofs.rmSync(d, { recursive: true, force: true })
+    } catch {}
+  }
 }
 
 let mainWin = null
@@ -173,6 +180,7 @@ function setupIpc() {
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
+  removeOldCaches()
   app.on('second-instance', () => {
     if (!mainWin || mainWin.isDestroyed()) return
     if (mainWin.isMinimized()) mainWin.restore()
@@ -183,7 +191,6 @@ if (!app.requestSingleInstanceLock()) {
 
 app.whenReady().then(() => {
   if (!app.hasSingleInstanceLock()) return
-  removeOldCaches()
   fetcher.init(UA)
   setupImageHeaders()
   setupIpc()
