@@ -36,6 +36,10 @@ function init(ua) {
     })
     keepLoginCookies(site, ses)
   }
+  // jm 站的登入是記在網站伺服器上，大約 30 分鐘沒動作就會被登出；程式開著時每 10 分鐘碰一下「我的」頁保持登入
+  setInterval(() => {
+    if (loadAccounts().jm?.seen) checkAuth('jm').catch(() => {})
+  }, 10 * 60 * 1000)
 }
 
 /**
