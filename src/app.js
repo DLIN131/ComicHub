@@ -33,6 +33,32 @@ const store = {
   },
 }
 
+// ---------- 閱讀進度（看到哪一話、哪一頁） ----------
+
+/** 進度的 key：網站作品用「站別_編號」，書櫃的檔案用檔名（換資料夾也對得上） */
+const progressKey = (d) => d.pkey || `${d.site}_${d.id}`
+const getProgress = (key) => store.get('progress', {})[key] || null
+const progressText = (p) => (p ? `${p.chapterTitle ? `${p.chapterTitle} ` : ''}第 ${p.page + 1} / ${p.total} 頁` : '')
+
+function saveProgress(key, data, histItem) {
+  const all = store.get('progress', {})
+  all[key] = { ...data, time: Date.now() }
+  // 只留最近 1000 本，免得 localStorage 越長越大
+  const keys = Object.keys(all)
+  if (keys.length > 1000) keys.sort((a, b) => all[a].time - all[b].time).slice(0, keys.length - 1000).forEach((k) => delete all[k])
+  store.set('progress', all)
+  // 「紀錄」頁的那本也一起更新看到哪
+  if (histItem) {
+    const list = store.get('history', [])
+    const h0 = list.find((x) => x.site === histItem.site && x.id === histItem.id)
+    if (h0) {
+      h0.sub = `看到：${progressText(all[key])}`
+      h0.time = Date.now()
+      store.set('history', list)
+    }
+  }
+}
+
 function addHistory(item, chapter) {
   const list = store.get('history', []).filter((x) => !(x.site === item.site && x.id === item.id))
   list.unshift({ site: item.site, id: item.id, title: item.title, cover: item.cover, lang: item.lang || '', sub: chapter ? `看到：${chapter}` : item.sub || '', time: Date.now() })
@@ -724,7 +750,15 @@ function renderDetail(box, close, d) {
   const readSet = new Set(store.get(readKey, []))
   const actions = h('div', { class: 'actions' })
   const startId = d.chapters.length ? d.chapters[0].id : null
-  actions.append(h('button', { class: 'btn primary', onclick: () => openReader(d, startId) }, d.chapters.length ? '從第一話開始' : '開始閱讀'))
+  // 有上次的進度就先給「繼續閱讀」
+  const prog = getProgress(progressKey(d))
+  const progChapterOk = prog && (!prog.chapterId || d.chapters.some((c) => c.id === prog.chapterId))
+  if (progChapterOk) {
+    actions.append(
+      h('button', { class: 'btn primary', onclick: () => openReader(d, prog.chapterId || startId, prog.page) }, `繼續閱讀（${progressText(prog)}）`),
+      h('button', { class: 'btn', onclick: () => openReader(d, startId) }, d.chapters.length ? '從第一話開始' : '從頭開始'),
+    )
+  } else actions.append(h('button', { class: 'btn primary', onclick: () => openReader(d, startId) }, d.chapters.length ? '從第一話開始' : '開始閱讀'))
   if (d.site === 'nh') {
     const fav = h('button', { class: 'btn', disabled: true }, '收藏')
     actions.append(fav)
@@ -930,7 +964,13 @@ function localCard(b, reload) {
       group ? h('span', { class: 'group-tag' }, group) : null,
     ),
     h('div', { class: 'title' }, b.title),
-    h('div', { class: 'sub' }, b.error ? `無法讀取：${b.error}` : [b.chapter, `${b.pageCount} 頁`].filter(Boolean).join('・')),
+    h(
+      'div',
+      { class: 'sub' },
+      b.error
+        ? `無法讀取：${b.error}`
+        : [b.chapter, getProgress(localKey(b))?.page > 0 ? `看到 ${getProgress(localKey(b)).page + 1} / ${b.pageCount} 頁` : `${b.pageCount} 頁`].filter(Boolean).join('・'),
+    ),
   )
 }
 
@@ -972,7 +1012,13 @@ function bookPopup(b, reload) {
   }
 
   const actions = h('div', { class: 'actions' })
-  if (!b.error) actions.append(h('button', { class: 'btn primary', onclick: () => openLocal(b) }, '開始閱讀'))
+  const lp = getProgress(localKey(b))
+  if (!b.error && lp && lp.page > 0 && lp.page < b.pageCount) {
+    actions.append(
+      h('button', { class: 'btn primary', onclick: () => openLocal(b, lp.page) }, `繼續閱讀（第 ${lp.page + 1} / ${b.pageCount} 頁）`),
+      h('button', { class: 'btn', onclick: () => openLocal(b) }, '從頭開始'),
+    )
+  } else if (!b.error) actions.append(h('button', { class: 'btn primary', onclick: () => openLocal(b) }, '開始閱讀'))
   if (srcSite) actions.append(h('button', { class: 'btn', onclick: () => openDetail({ site: srcSite, id: nm[2], title: b.title, cover: b.cover }) }, '網站作品頁'))
   actions.append(
     h('button', { class: 'btn', onclick: () => window.hub.dl.show(b.file) }, '在資料夾顯示'),
@@ -1105,12 +1151,15 @@ function bookPopup(b, reload) {
   detailEl.scrollTop = 0
 }
 
-function openLocal(b) {
+const localKey = (b) => `local_${b.name}`
+
+function openLocal(b, startPage = 0) {
   if (!b.pageCount) return toast('這個檔案裡沒有圖片')
   closeDetail()
   openReader(
-    { site: siteOfLocal(b) || 'local', id: b.id, title: b.title, subtitle: b.chapter, chapters: [], local: true, localPages: b.pages.map((url) => ({ url, segs: 0 })) },
+    { site: siteOfLocal(b) || 'local', id: b.id, pkey: localKey(b), title: b.title, subtitle: b.chapter, chapters: [], local: true, localPages: b.pages.map((url) => ({ url, segs: 0 })) },
     null,
+    startPage,
   )
 }
 
@@ -1149,8 +1198,17 @@ const readerEl = $('#reader')
 let readerToken = 0
 let observer = null
 
-async function openReader(d, chapterId) {
+/** 繼續閱讀用：開到某一頁時，上面的圖片載入會把畫面往下推，所以先「釘住」那一頁，使用者自己捲動就放開 */
+let pinEl = null
+const unpin = () => {
+  pinEl = null
+}
+for (const ev of ['wheel', 'mousedown', 'touchstart']) readerEl.addEventListener(ev, unpin, { passive: true })
+document.addEventListener('keydown', unpin)
+
+async function openReader(d, chapterId, startPage = 0) {
   const token = ++readerToken
+  pinEl = null
   const chIndex = d.chapters.findIndex((c) => c.id === chapterId)
   const chapter = chIndex >= 0 ? d.chapters[chIndex] : null
   const width = store.get('pageWidth', 900)
@@ -1221,8 +1279,22 @@ async function openReader(d, chapterId) {
   )
   list.replaceChildren(...els, end)
 
-  // 捲動時更新頁碼、讓上方列淡出
+  // 從上次的頁數開始
+  const start = Math.max(0, Math.min(startPage, els.length - 1))
+  if (start > 0) {
+    pinEl = els[start]
+    readerEl.scrollTop = pinEl.offsetTop
+    setTimeout(() => {
+      if (pinEl === els[start]) pinEl = null
+    }, 15000)
+  }
+
+  // 捲動時更新頁碼、記住看到哪一頁、讓上方列淡出
+  const pkey = progressKey(d)
+  const histItem = d.local ? null : { site: d.site, id: d.id }
   let lastY = 0
+  let saved = -1
+  let saveTimer = null
   readerEl.onscroll = () => {
     const y = readerEl.scrollTop
     bar.classList.toggle('faded', y > lastY && y > 200)
@@ -1234,6 +1306,23 @@ async function openReader(d, chapterId) {
       cur = Number(el.dataset.i)
     }
     counter.textContent = `${cur + 1} / ${imgs.length}`
+    // 用畫面頂端那一頁當進度（下次從這頁開頭開始）
+    let topPage = 0
+    for (const el of els) {
+      if (el.offsetTop > y + 60) break
+      topPage = Number(el.dataset.i)
+    }
+    if (topPage === saved || (pinEl && topPage !== start)) return
+    clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => {
+      if (token !== readerToken) return
+      saved = topPage
+      saveProgress(pkey, { chapterId: chapter?.id || null, chapterTitle: chapter && d.chapters.length > 1 ? chapter.title : '', page: topPage, total: imgs.length }, histItem)
+    }, 500)
+  }
+  // 一打開就先記一次（只點開沒捲也算看過第一頁 / 從上次那頁開始）
+  if (!getProgress(pkey) || getProgress(pkey).chapterId !== (chapter?.id || null)) {
+    saveProgress(pkey, { chapterId: chapter?.id || null, chapterTitle: chapter && d.chapters.length > 1 ? chapter.title : '', page: start, total: imgs.length }, histItem)
   }
 }
 
@@ -1254,6 +1343,8 @@ async function loadPage(el, retry = 0) {
     el.classList.add('loaded')
     if (p.segs > 0) el.replaceChildren(descramble(img, p.segs))
     else el.replaceChildren(img)
+    // 上面的圖載入後高度變了，把畫面拉回要繼續看的那一頁
+    if (pinEl && pinEl.isConnected) readerEl.scrollTop = pinEl.offsetTop
   }
   img.onerror = () => {
     if (retry < 2) return setTimeout(() => loadPage(el, retry + 1), 1200)

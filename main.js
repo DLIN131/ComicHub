@@ -9,6 +9,21 @@ const library = require('./library')
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
 app.userAgentFallback = UA
 
+// 不把看過的圖片 / 網頁存到磁碟快取：不關的話 userData 和各站 partition 的 Cache 會越看越大（看一陣子就上百 MB）。
+// 同一次執行裡圖片還是有記憶體快取，往回捲不會重抓。（在回應加 Cache-Control 沒用，要用這個開關，見 AniPlay 的經驗）
+app.commandLine.appendSwitch('disable-http-cache')
+
+/** 刪掉以前留下的快取資料夾（網頁快取、腳本快取、GPU 快取），程式啟動時清一次 */
+function removeOldCaches() {
+  const ofs = require('original-fs')
+  const ud = app.getPath('userData')
+  const dirs = ['Cache', 'Code Cache', 'GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache'].map((n) => path.join(ud, n))
+  try {
+    for (const p of ofs.readdirSync(path.join(ud, 'Partitions'))) for (const n of ['Cache', 'Code Cache', 'GPUCache']) dirs.push(path.join(ud, 'Partitions', p, n))
+  } catch {}
+  for (const d of dirs) ofs.rm(d, { recursive: true, force: true }, () => {})
+}
+
 let mainWin = null
 
 function createWindow() {
@@ -168,6 +183,7 @@ if (!app.requestSingleInstanceLock()) {
 
 app.whenReady().then(() => {
   if (!app.hasSingleInstanceLock()) return
+  removeOldCaches()
   fetcher.init(UA)
   setupImageHeaders()
   setupIpc()
