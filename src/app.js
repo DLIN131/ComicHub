@@ -293,7 +293,7 @@ const pages = {
       if (currentNav !== 'favorites') return
       if (!st.loggedIn) {
         body.replaceChildren(
-          status(st.error ? `無法確認登入狀態：${st.error}` : `還沒登入${SITES[site].label}，登入後就能看到網站上的收藏`),
+          status(st.error ? `無法確認登入狀態：${st.error}` : st.expired ? `${SITES[site].label} 的登入已過期，請重新登入就能看到收藏` : `還沒登入${SITES[site].label}，登入後就能看到網站上的收藏`),
           h('div', { style: 'text-align:center' }, h('button', { class: 'btn primary', onclick: () => doLogin(site).then(() => pages.favorites(site)) }, `登入 ${SITES[site].label}`)),
         )
         return
@@ -535,7 +535,8 @@ const pages = {
             )
           }
         } else {
-          st.textContent = s.error ? `未登入（${s.error}）` : '未登入'
+          st.textContent = s.error ? `未登入（${s.error}）` : s.expired ? '登入已過期，請重新登入' : '未登入'
+          if (s.expired) st.className = 'st warn'
           btns.append(
             h('button', { class: 'btn primary', onclick: () => doLogin(k).then(refresh) }, '登入'),
             h('button', { class: 'btn', onclick: () => window.hub.openSite(k, cfg.sites[k].base + '/') }, '開啟網站'),
@@ -581,7 +582,29 @@ const pages = {
         { class: 'hint' },
         '按「登入」會開啟該網站自己的登入頁，帳號密碼直接在網站上輸入，本程式不會經手。',
         h('br'),
-        '登入成功後關掉那個視窗即可，登入狀態會保存在本機，下次開程式不用重登。三個站的登入互相獨立。',
+        '登入成功後關掉那個視窗即可，登入狀態會保存在本機，下次開程式不用重登。各站的登入互相獨立。',
+      ),
+      h(
+        'div',
+        { class: 'version-row' },
+        '目前版本：',
+        h('b', {}, versionText()),
+        h(
+          'button',
+          {
+            class: 'btn',
+            onclick: async (e) => {
+              const btn = e.currentTarget
+              btn.disabled = true
+              btn.textContent = '檢查中…'
+              const r = await checkUpdate(true)
+              btn.disabled = false
+              btn.textContent = '檢查更新'
+              toast({ dev: '開發版不檢查更新', latest: '已經是最新版', shown: '有新版本，請看右下角', error: '檢查更新失敗，請稍後再試' }[r])
+            },
+          },
+          '檢查更新',
+        ),
       ),
     )
   },
@@ -1333,17 +1356,25 @@ function setupLang() {
 const REPO = 'DLIN131/ComicHub'
 const ZIP_NAME = 'ComicHub-Windows.zip'
 
-/** version.js 由 CI 寫入（APP_VERSION = run_number），本機開發是 0，不檢查 */
-async function checkUpdate() {
+/** 目前版本的文字；version.js 由 CI 寫入（APP_VERSION = run_number），本機開發是 0 */
+const versionText = () => (Number(window.APP_VERSION) ? `v1.0.${Number(window.APP_VERSION)}` : '開發版')
+
+/**
+ * 檢查新版；有的話右下角跳更新提示。manual = 使用者自己按「檢查更新」（不管有沒有略過這版都顯示）。
+ * 回傳 'dev' | 'latest' | 'shown' | 'error'
+ */
+async function checkUpdate(manual = false) {
   const current = Number(window.APP_VERSION) || 0
-  if (!current) return
+  if (!current) return 'dev'
   try {
     const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
-    if (!res.ok) return
+    if (!res.ok) return 'error'
     const r = await res.json()
     const code = Number(String(r.tag_name || '').split('.').pop()) || 0
     const asset = (r.assets || []).find((a) => a.name === ZIP_NAME)
-    if (code <= current || !asset || store.get('skippedVersion', 0) === code) return
+    if (code <= current || !asset) return 'latest'
+    if (!manual && store.get('skippedVersion', 0) === code) return 'latest'
+    document.querySelector('.update-bar')?.remove()
     // 發布說明裡 --- 以下是固定的下載資訊，Co-Authored-By 也不用給使用者看
     const notes = String(r.body || '')
       .split('\n---')[0]
@@ -1397,7 +1428,10 @@ async function checkUpdate() {
     }
     later.onclick = () => bar.remove()
     document.body.append(bar)
-  } catch {}
+    return 'shown'
+  } catch {
+    return 'error'
+  }
 }
 
 function setupSearch() {
@@ -1475,6 +1509,8 @@ function updateDlCount() {
 dl.onChange(updateDlCount)
 
 loadConfig().then(() => {
+  // 左上角顯示目前版本
+  $('.brand').append(h('span', { class: 'ver', title: '目前版本' }, versionText()))
   setupLang()
   setupSearch()
   checkUpdate()

@@ -1004,3 +1004,28 @@ main {
 .link-btn:hover {
   color: #ff7b7b;
 }
+
+/* ---------- 版本 ---------- */
+.brand .ver {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--dim);
+  letter-spacing: 0;
+}
+.version-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+  color: var(--dim);
+}
+.version-row b {
+  color: var(--text);
+}
+.version-row .btn {
+  padding: 5px 12px;
+}
+.account .st.warn {
+  color: #ffb347;
+}

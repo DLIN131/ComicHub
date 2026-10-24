@@ -88,6 +88,12 @@ function openSiteWindow(site, url, { login = false } = {}) {
     let typed = ''
     let timer = null
     if (login && site === 'jm') {
+      // 沒勾「記住我」的話，網站那邊的登入一陣子沒動就會失效（重開程式後收藏又變空的），所以預設幫忙勾起來
+      win.webContents.on('did-finish-load', () => {
+        win.webContents
+          .executeJavaScript(`document.querySelectorAll('input[name="id_remember"], input[name="login_remember"]').forEach((c) => { c.checked = true }); 0`)
+          .catch(() => {})
+      })
       timer = setInterval(() => {
         if (win.isDestroyed()) return
         win.webContents

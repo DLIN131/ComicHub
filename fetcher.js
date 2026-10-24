@@ -273,7 +273,7 @@ async function bytes(site, url) {
 
 // ---------- 帳號 ----------
 
-async function authStatus(site) {
+async function checkAuth(site) {
   if (site === 'nh') {
     if (!(await nhToken()) && !(await nhRefresh())) return { loggedIn: false }
     const r = await get('nh', '/api/v2/user', { json: true })
@@ -346,13 +346,33 @@ function loadAccounts() {
   return accounts
 }
 const accountName = (site) => loadAccounts()[site]?.name || ''
+function saveAccounts() {
+  try {
+    fs.writeFileSync(accountsFile(), JSON.stringify(loadAccounts(), null, 2))
+  } catch {}
+}
 function setAccountName(site, name) {
   const a = loadAccounts()
   const v = String(name || '').trim()
-  if (v) a[site] = { name: v }
-  else delete a[site]
-  fs.writeFileSync(accountsFile(), JSON.stringify(a, null, 2))
+  a[site] = { ...a[site], name: v }
+  if (!v) delete a[site].name
+  saveAccounts()
   return { ok: true }
+}
+
+/**
+ * 包一層：記住「這個站登入過」。之後變成沒登入（網站那邊的登入過期了）就回 expired，
+ * 畫面才能說「登入已過期，請重新登入」，而不是只顯示空的收藏。
+ */
+async function authStatus(site) {
+  const s = await checkAuth(site)
+  const a = loadAccounts()
+  if (s.loggedIn && !a[site]?.seen) {
+    a[site] = { ...a[site], seen: true }
+    saveAccounts()
+  }
+  if (!s.loggedIn && !s.error && a[site]?.seen) s.expired = true
+  return s
 }
 
 /** eh 站的帳號在論壇子網域 */
@@ -362,7 +382,9 @@ async function logout(site) {
   const ses = sesOf(site)
   if (site === 'nh') await ses.fetch(base('nh') + '/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {})
   await ses.clearStorageData()
-  setAccountName(site, '')
+  // 自己登出的就不算「過期」，帳號名稱也一起清掉
+  delete loadAccounts()[site]
+  saveAccounts()
   return { loggedIn: false }
 }
 
