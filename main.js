@@ -28,9 +28,10 @@ state.setup()
 function removeOldCaches() {
   const ofs = require('original-fs')
   const ud = app.getPath('userData')
-  const dirs = ['Cache', 'Code Cache', 'GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache'].map((n) => path.join(ud, n))
+  const CACHE_DIRS = ['Cache', 'Code Cache', 'GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache', 'DawnCache', 'GrShaderCache', 'GraphiteDawnCache', 'ShaderCache']
+  const dirs = CACHE_DIRS.map((n) => path.join(ud, n))
   try {
-    for (const p of ofs.readdirSync(path.join(ud, 'Partitions'))) for (const n of ['Cache', 'Code Cache', 'GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache']) dirs.push(path.join(ud, 'Partitions', p, n))
+    for (const p of ofs.readdirSync(path.join(ud, 'Partitions'))) for (const n of CACHE_DIRS) dirs.push(path.join(ud, 'Partitions', p, n))
   } catch {}
   for (const d of dirs) {
     try {
@@ -183,12 +184,20 @@ function setupIpc() {
   ipcMain.handle('auth:logout', (_e, site) => fetcher.logout(site))
   ipcMain.handle('site:open', (_e, site, url) => openSiteWindow(site, url))
   ipcMain.handle('shell:external', (_e, url) => shell.openExternal(url))
+  // 「修復程式」：記下來後重開，啟動時清掉 Chromium 的資料（保留紀錄和登入）
+  ipcMain.handle('app:repair', () => {
+    watchdog.requestRepair()
+    app.relaunch()
+    app.isQuitting = true
+    app.quit()
+  })
 }
 
 // 同時只開一份：再開一次就把原本的視窗叫到前面（兩份同時跑會互相清掉對方的更新暫存、下載狀態也會打架）
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
+  watchdog.repairIfNeeded()
   removeOldCaches()
   app.on('second-instance', () => {
     if (!mainWin || mainWin.isDestroyed()) return

@@ -17,6 +17,7 @@ window.addEventListener('unhandledrejection', (e) => ipcRenderer.send('app:error
 
 contextBridge.exposeInMainWorld('hub', {
   ready: () => ipcRenderer.send('app:ready'),
+  repair: () => ipcRenderer.invoke('app:repair'),
   // 程式資料（進度、紀錄、設定…）存在主程序的 state.json；讀取一次拿全部，之後寫入只送變動
   state: {
     all: () => ipcRenderer.sendSync('state:all'),

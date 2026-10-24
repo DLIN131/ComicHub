@@ -677,6 +677,17 @@ const pages = {
           '檢查更新',
         ),
         h('button', { class: 'btn', onclick: () => showChangelog() }, '更新紀錄'),
+        h(
+          'button',
+          {
+            class: 'btn',
+            title: '開起來黑畫面、畫面怪怪的時候用：重開並清掉暫存資料，觀看紀錄、書櫃、登入都會保留',
+            onclick: () => {
+              if (confirm('修復程式：會重新開啟 ComicHub，並清掉暫存資料。\n觀看紀錄、閱讀進度、書櫃、登入都會保留。要繼續嗎？')) window.hub.repair()
+            },
+          },
+          '修復程式',
+        ),
       ),
     )
   },
@@ -1810,6 +1821,11 @@ loadConfig().then(() => {
   setupSearch()
   checkUpdate()
   showWhatsNew()
+  // 資料夾被刪掉後，從下載資料夾的備份把紀錄救回來了
+  if (store.get('_restoredFrom')) {
+    toast('已從下載資料夾的備份還原觀看紀錄和設定')
+    store.set('_restoredFrom', null)
+  }
   // 告訴主程序畫面載好了（沒回報的話會自動重載，避免黑畫面卡住）
   window.hub.ready()
   pages.home()

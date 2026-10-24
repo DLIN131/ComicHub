@@ -40,6 +40,101 @@ function beforeReady() {
   }
 }
 
+// ---------- 自動修復 ----------
+// 使用者回報：開起來黑畫面，把 AppData 裡的資料夾整個刪掉才好（但觀看紀錄也跟著沒了）。
+// 代表是 Chromium 自己存在 userData 的東西壞了（顯示卡 / 著色器快取最常見）。
+// 做法：每次啟動先放一個「啟動中」記號，畫面真的載好才拿掉；
+// 下次啟動還看到記號 = 上次沒成功開起來 → 把 Chromium 的東西清掉，只留 ComicHub 自己的資料和登入。
+
+/** ComicHub 自己的檔案，修復時一定保留 */
+const KEEP_FILES = new Set([
+  'state.json',
+  'state.json.bak',
+  'accounts.json',
+  'library.json',
+  'sites.json',
+  'downloads.json',
+  'safe-mode.json',
+  'startup.log',
+  'update.log',
+  'starting.flag',
+  'repair.flag',
+  // Cookie 的加密金鑰在這裡，刪了各站登入就讀不出來
+  'Local State',
+])
+
+/** 把 userData 裡 Chromium 的資料清掉（保留 ComicHub 的資料、各站登入 cookie、還沒搬家的舊版 localStorage） */
+function deepClean(why) {
+  const ud = app.getPath('userData')
+  const removed = []
+  const rm = (p) => {
+    try {
+      fs.rmSync(p, { recursive: true, force: true })
+      removed.push(path.relative(ud, p))
+    } catch {}
+  }
+  let migrated = false
+  try {
+    migrated = !!JSON.parse(fs.readFileSync(path.join(ud, 'state.json'), 'utf8'))._migrated
+  } catch {}
+  let names = []
+  try {
+    names = fs.readdirSync(ud)
+  } catch {}
+  for (const n of names) {
+    if (KEEP_FILES.has(n)) continue
+    // 各站的登入在 Partitions\<站>\Network（Cookies），其他都可以清
+    if (n === 'Partitions') {
+      let parts = []
+      try {
+        parts = fs.readdirSync(path.join(ud, n))
+      } catch {}
+      for (const p of parts) {
+        let inner = []
+        try {
+          inner = fs.readdirSync(path.join(ud, n, p))
+        } catch {}
+        for (const i of inner) if (i !== 'Network') rm(path.join(ud, n, p, i))
+      }
+      continue
+    }
+    // 舊版的觀看紀錄還在 localStorage、還沒搬到 state.json 的話先別刪
+    if (n === 'Local Storage' && !migrated) continue
+    rm(path.join(ud, n))
+  }
+  log(`repair (${why}): removed ${removed.length} items: ${removed.slice(0, 30).join(', ')}`)
+}
+
+/**
+ * 拿到單一執行鎖之後、app ready 之前呼叫（不能在第二份程式裡做，會清到正在跑的那份）。
+ * 上次沒成功開起來、或使用者按了「修復程式」，就清一次。
+ */
+function repairIfNeeded() {
+  if (fs.existsSync(file('repair.flag'))) {
+    deepClean('requested by user')
+    fs.rmSync(file('repair.flag'), { force: true })
+  } else if (fs.existsSync(file('starting.flag'))) {
+    deepClean('previous start never finished')
+  }
+  try {
+    fs.writeFileSync(file('starting.flag'), new Date().toISOString())
+  } catch {}
+}
+
+/** 畫面載好了：拿掉「啟動中」記號 */
+function startedOk() {
+  try {
+    fs.rmSync(file('starting.flag'), { force: true })
+  } catch {}
+}
+
+/** 「修復程式」按鈕：下次啟動時清一次 */
+function requestRepair() {
+  try {
+    fs.writeFileSync(file('repair.flag'), new Date().toISOString())
+  } catch {}
+}
+
 function errorPage() {
   const html = `<!doctype html><meta charset="utf-8"><body style="background:#111116;color:#e8e8ee;font:15px 'Microsoft JhengHei UI',sans-serif;padding:40px;line-height:1.8">
 <h2>ComicHub 無法正常開啟</h2>
@@ -116,6 +211,7 @@ function watch(win) {
     if (e.sender !== win.webContents || ready) return
     ready = true
     clearTimeout(timer)
+    startedOk()
     if (reloads) log('ready after reload')
     // 頁面說載好了，但顯示卡出問題時畫面還是可能一片黑：3 秒後擷取畫面看看有沒有任何亮的東西（標題列的字一定是亮的）
     setTimeout(() => checkPainted(win), 3000)
@@ -132,4 +228,4 @@ function watch(win) {
   arm()
 }
 
-module.exports = { beforeReady, watch, log }
+module.exports = { beforeReady, repairIfNeeded, requestRepair, watch, log }
