@@ -4,16 +4,22 @@ import { store } from './store.js'
 
 const CONCURRENCY = 4
 const listeners = new Set()
+// 完成和失敗的都留著（失敗的才查得到原因）；下載中的關程式就沒了，不留。
+// 一定要放在 loadDone() 被呼叫之前：以前寫在下面，有下載紀錄的人一開程式就
+// 「Cannot access 'KEEP' before initialization」整個頁面起不來 → 黑畫面（v1.0.19～1.0.25）
+const KEEP = ['done', 'error']
 const jobs = loadDone()
 let running = false
 
-// 完成和失敗的都留著（失敗的才查得到原因）；下載中的關程式就沒了，不留
-const KEEP = ['done', 'error']
-
 function loadDone() {
-  const list = store.get('downloads', [])
-  // 舊資料可能不是陣列（壞掉的存檔），不要讓整個程式起不來
-  return Array.isArray(list) ? list.filter((j) => j && KEEP.includes(j.status)) : []
+  try {
+    const list = store.get('downloads', [])
+    // 舊資料可能不是陣列（壞掉的存檔），不要讓整個程式起不來
+    return Array.isArray(list) ? list.filter((j) => j && KEEP.includes(j.status)) : []
+  } catch (e) {
+    console.error(`load download records failed: ${e && e.stack ? e.stack : e}`)
+    return []
+  }
 }
 
 function persist() {
