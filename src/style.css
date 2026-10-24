@@ -1110,3 +1110,151 @@ body {
 .brand {
   white-space: nowrap;
 }
+
+/* ---------- 書櫃合集 ---------- */
+.badge.col {
+  background: linear-gradient(135deg, #c86bff, #6b8bff);
+}
+.card.collection .thumb::after {
+  /* 疊兩張的感覺，看得出是合集 */
+  content: '';
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 0 3px rgba(200, 107, 255, 0.55);
+  border-radius: 10px 10px 0 0;
+  pointer-events: none;
+}
+.select-bar {
+  position: sticky;
+  top: 64px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+}
+.select-bar span {
+  flex: 1;
+}
+.card.pickable {
+  outline: 2px dashed transparent;
+}
+.card.pickable:hover {
+  outline-color: var(--dim);
+}
+.card.picked {
+  outline: 3px solid var(--accent);
+}
+.pick-no {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-width: 26px;
+  height: 26px;
+  border-radius: 13px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+}
+.col-dialog {
+  max-width: 720px;
+}
+.col-dialog h2 {
+  margin: 4px 40px 16px 0;
+  font-size: 20px;
+}
+.col-dialog select,
+.col-dialog input {
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 9px;
+  font: inherit;
+  min-width: 260px;
+}
+.cover-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0 4px;
+}
+.cover-opt {
+  padding: 0;
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background: none;
+  width: 90px;
+  height: 120px;
+  overflow: hidden;
+}
+.cover-opt img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.cover-opt.on {
+  border-color: var(--accent);
+}
+.col-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--panel2);
+  border-radius: 10px;
+  padding: 8px 12px;
+  border: 2px solid transparent;
+}
+.col-row.is-cover {
+  border-color: rgba(200, 107, 255, 0.5);
+}
+.col-row.dragging {
+  opacity: 0.4;
+}
+.col-row.drop-here {
+  border-color: var(--accent);
+}
+.col-row img {
+  width: 44px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 5px;
+  cursor: pointer;
+  flex: none;
+}
+.drag-handle {
+  color: var(--dim);
+  cursor: grab;
+  user-select: none;
+}
+.col-row-body {
+  flex: 1;
+  min-width: 0;
+}
+.col-row-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.col-row .dl-btns .btn {
+  padding: 5px 10px;
+}
+.toc-sel {
+  max-width: 260px;
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 13px;
+}

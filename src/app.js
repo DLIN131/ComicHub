@@ -349,7 +349,18 @@ const pages = {
     const tabs = h('div', { class: 'subtabs' })
     const body = h('div', {}, loading())
     const filterInput = h('input', { class: 'shelf-filter', type: 'search', placeholder: '在書櫃中找書名或作者…' })
+    const selectBar = h('div', { class: 'select-bar hidden' })
     let books = []
+    // 建立合集時的選取模式：依點的順序記下書名；pickTarget = 選完要加進哪個合集
+    let selecting = null
+    let pickTarget = ''
+    startShelfPick = (targetId) => {
+      selecting = []
+      pickTarget = targetId || ''
+      store.set('libGroup', 'all')
+      render()
+      selectBar.scrollIntoView({ block: 'nearest' })
+    }
     // 只篩畫面，不重新讀資料夾
     const render = () => {
       if (currentNav !== 'library') return
@@ -357,7 +368,16 @@ const pages = {
       let group = store.get('libGroup', 'all')
       if (group !== 'all' && group !== NO_GROUP && !groups.list.includes(group)) group = 'all'
       const kw = filterInput.value.trim().toLowerCase()
-      const visible = books.filter((b) => passLang(localLang(b)) && (!kw || `${b.title} ${b.name} ${(b.authors || []).join(' ')}`.toLowerCase().includes(kw)))
+      // 合集排最前面；已經在合集裡的書不再單獨顯示
+      const byName = new Map(books.map((b) => [b.name, b]))
+      const cols = getCollections().map((c) => resolveCollection(c, byName))
+      const inCol = new Set(getCollections().flatMap((c) => c.files))
+      const items = [...cols, ...books.filter((b) => !inCol.has(b.name))]
+      shelfItems = items
+      shelfBooks = books
+      const text = (b) => (b.isCol ? `${b.title} ${b.members.map((m) => m.title).join(' ')} ${b.authors.join(' ')}` : `${b.title} ${b.name} ${(b.authors || []).join(' ')}`)
+      const langOk = (b) => (b.isCol ? !lang || b.members.some((m) => passLang(localLang(m))) : passLang(localLang(b)))
+      const visible = items.filter((b) => langOk(b) && (!kw || text(b).toLowerCase().includes(kw)))
       const inGroup = (b, g) => (g === 'all' ? true : g === NO_GROUP ? !groups.of[b.name] : groups.of[b.name] === g)
       const opts = [['all', '全部'], [NO_GROUP, '未分組'], ...groups.list.map((g) => [g, g])]
       tabs.replaceChildren(
@@ -380,9 +400,72 @@ const pages = {
       if (!books.length) body.replaceChildren(status('下載資料夾裡還沒有漫畫。在作品頁按「下載 CBZ」，或用「開啟漫畫檔」讀其他 CBZ'))
       else if (!shown.length) body.replaceChildren(status(kw ? `找不到「${filterInput.value.trim()}」` : lang ? `這裡沒有${LANGS[lang]}的漫畫` : '這個分組還是空的。點書櫃裡的漫畫就能設定分組'))
       else {
-        grid.replaceChildren(...shown.map((b) => localCard(b, load)))
+        grid.replaceChildren(...shown.map((b) => (b.isCol ? collectionCard(b, load) : selecting ? pickCard(b) : localCard(b, load))))
         body.replaceChildren(grid)
       }
+      renderSelectBar()
+    }
+    /** 選取模式的卡片：點一下選 / 取消，右上角顯示第幾個選的 */
+    const pickCard = (b) => {
+      const el = localCard(b, load)
+      const idx = selecting.indexOf(b.name)
+      el.classList.add('pickable')
+      if (idx >= 0) {
+        el.classList.add('picked')
+        el.querySelector('.thumb').append(h('span', { class: 'pick-no' }, String(idx + 1)))
+      }
+      // 擋掉原本「開管理視窗」的點擊，改成選取
+      el.addEventListener(
+        'click',
+        (e) => {
+          e.stopImmediatePropagation()
+          const i = selecting.indexOf(b.name)
+          if (i >= 0) selecting.splice(i, 1)
+          else selecting.push(b.name)
+          render()
+        },
+        true,
+      )
+      return el
+    }
+    const renderSelectBar = () => {
+      selectBar.classList.toggle('hidden', !selecting)
+      if (!selecting) return
+      selectBar.replaceChildren(
+        h(
+          'span',
+          {},
+          (pickTarget ? `加入「${getCollections().find((c) => c.id === pickTarget)?.name || ''}」：` : '') +
+            (selecting.length ? `已選 ${selecting.length} 本（依點的順序排）` : '點漫畫選取要放進合集的書（依點的順序排）'),
+        ),
+        h(
+          'button',
+          {
+            class: 'btn primary',
+            disabled: selecting.length ? false : 'disabled',
+            onclick: () => {
+              const picked = selecting.map((n) => books.find((b) => b.name === n)).filter(Boolean)
+              const target = pickTarget
+              selecting = null
+              pickTarget = ''
+              render()
+              collectionDialog(picked, books, load, target)
+            },
+          },
+          '下一步：命名、選封面',
+        ),
+        h(
+          'button',
+          {
+            class: 'btn',
+            onclick: () => {
+              selecting = null
+              render()
+            },
+          },
+          '取消',
+        ),
+      )
     }
     const load = async () => {
       const list = await window.hub.lib.list()
@@ -408,6 +491,20 @@ const pages = {
         h('h2', {}, '書櫃（離線閱讀）'),
         filterInput,
         h('div', { class: 'head-btns' },
+        h(
+          'button',
+          {
+            class: 'more',
+            title: '把幾本下載的漫畫串成一本看',
+            onclick: () => {
+              if (selecting) {
+                selecting = null
+                render()
+              } else startShelfPick('')
+            },
+          },
+          '建立合集',
+        ),
         h('button', { class: 'more', onclick: load }, '重新整理'),
         h(
           'button',
@@ -430,6 +527,7 @@ const pages = {
         ),
       ),
       tabs,
+      selectBar,
       body,
     )
     load()
@@ -1077,6 +1175,7 @@ function bookPopup(b, reload) {
     )
   } else if (!b.error) actions.append(h('button', { class: 'btn primary', onclick: () => openLocal(b) }, '開始閱讀'))
   if (srcSite) actions.append(h('button', { class: 'btn', onclick: () => openDetail({ site: srcSite, id: nm[2], title: b.title, cover: b.cover }) }, '網站作品頁'))
+  if (!b.error) actions.append(h('button', { class: 'btn', title: '放進新的或現有的合集', onclick: () => collectionDialog([b], shelfBooks, reload) }, '加入合集'))
   actions.append(
     h('button', { class: 'btn', onclick: () => window.hub.dl.show(b.file) }, '在資料夾顯示'),
     h(
@@ -1210,6 +1309,325 @@ function bookPopup(b, reload) {
 
 const localKey = (b) => `local_${b.name}`
 
+// ---------- 書櫃合集：把幾本下載的漫畫串成一本看，可以跳到每本的第一頁 ----------
+// 存在 state 的 collections：[{ id, name, files: [書的檔名…], cover: 當封面那本的檔名 }]
+// 不另外產生檔案，原本的 CBZ 都不動；解散合集書就回到書櫃
+
+/** 書櫃目前畫面上的東西（合集 + 書），合集視窗更新後拿來重畫 */
+let shelfItems = []
+/** 書櫃裡所有的書（含已在合集裡的） */
+let shelfBooks = []
+/** 書櫃頁提供的：進入選書模式，選完加進指定合集（targetId 空 = 新合集） */
+let startShelfPick = null
+
+const getCollections = () => store.get('collections', [])
+const saveCollections = (list) => store.set('collections', list)
+const colKey = (c) => `col_${c.id}`
+
+/** 合集 + 它的書（依合集裡的順序；檔案不見的會略過） */
+function resolveCollection(c, byName) {
+  const members = c.files.map((f) => byName.get(f)).filter((b) => b && !b.error && b.pageCount)
+  const coverBook = byName.get(c.cover) || members[0]
+  return {
+    isCol: true,
+    col: c,
+    id: c.id,
+    name: `col:${c.id}`, // 分組用
+    title: c.name,
+    members,
+    missing: c.files.length - members.length,
+    cover: coverBook?.cover || '',
+    pageCount: members.reduce((n, b) => n + b.pageCount, 0),
+    authors: [...new Set(members.flatMap((b) => b.authors || []))],
+  }
+}
+
+function openCollection(item, startPage = 0) {
+  if (!item.members.length) return toast('這個合集裡沒有可以看的漫畫')
+  closeDetail()
+  const localPages = []
+  const toc = []
+  for (const b of item.members) {
+    toc.push({ title: b.chapter ? `${b.title} ${b.chapter}` : b.title, start: localPages.length, count: b.pageCount })
+    for (const url of b.pages) localPages.push({ url, segs: 0 })
+  }
+  openReader({ site: 'local', id: item.id, pkey: colKey(item.col), title: item.title, subtitle: '', chapters: [], local: true, localPages, toc }, null, startPage)
+}
+
+function collectionCard(item, reload) {
+  const p = getProgress(colKey(item.col))
+  const group = shelfGroups().of[item.name]
+  return h(
+    'div',
+    { class: 'card collection', title: item.title, onclick: () => collectionPopup(item, reload) },
+    h(
+      'div',
+      { class: 'thumb' },
+      item.cover ? h('img', { src: item.cover, loading: 'lazy', alt: '', onerror: (e) => (e.target.style.visibility = 'hidden') }) : null,
+      h('span', { class: 'badge col' }, `合集・${item.members.length} 本`),
+      group ? h('span', { class: 'group-tag' }, group) : null,
+    ),
+    h('div', { class: 'title' }, item.title),
+    h('div', { class: 'sub' }, [p?.page > 0 ? `看到 ${p.page + 1} / ${item.pageCount} 頁` : `共 ${item.pageCount} 頁`, item.missing ? `${item.missing} 本檔案不見了` : ''].filter(Boolean).join('・')),
+  )
+}
+
+/**
+ * 建立合集 / 加進現有合集的小視窗。
+ * picked：依點選順序的書；封面可以從這些書（加入現有合集時也包含原本的書）裡選。
+ */
+function collectionDialog(picked, allBooks, reload, targetId = '') {
+  const cols = getCollections()
+  const byName = new Map(allBooks.map((b) => [b.name, b]))
+  const target = h('select', {}, h('option', { value: '' }, '新的合集'), cols.map((c) => h('option', { value: c.id }, `加到「${c.name}」`)))
+  const nameInput = h('input', { type: 'text', value: cleanTitle(picked[0].title).slice(0, 60), maxlength: '80' })
+  const nameRow = h('div', { class: 'tag-group' }, h('span', { class: 'k' }, '名稱'), h('div', { class: 'v' }, nameInput))
+  const coverBox = h('div', { class: 'cover-pick' })
+  let cover = picked[0].name
+  const renderCovers = () => {
+    const col = cols.find((c) => c.id === target.value)
+    const books = [...(col ? col.files.map((f) => byName.get(f)).filter(Boolean) : []), ...picked.filter((b) => !col?.files.includes(b.name))]
+    if (col && !books.some((b) => b.name === cover)) cover = col.cover
+    coverBox.replaceChildren(
+      ...books.map((b) =>
+        h(
+          'button',
+          {
+            class: `cover-opt${b.name === cover ? ' on' : ''}`,
+            title: b.title,
+            onclick: () => {
+              cover = b.name
+              renderCovers()
+            },
+          },
+          h('img', { src: b.cover || '', alt: '' }),
+        ),
+      ),
+    )
+    nameRow.classList.toggle('hidden', !!col)
+  }
+  target.onchange = () => {
+    const col = cols.find((c) => c.id === target.value)
+    if (col) cover = col.cover
+    renderCovers()
+  }
+  const save = () => {
+    const list = getCollections()
+    const col = list.find((c) => c.id === target.value)
+    if (col) {
+      for (const b of picked) if (!col.files.includes(b.name)) col.files.push(b.name)
+      col.cover = cover
+      toast(`已加到「${col.name}」`)
+    } else {
+      const name = nameInput.value.trim() || cleanTitle(picked[0].title)
+      list.unshift({ id: Date.now().toString(36), name, files: picked.map((b) => b.name), cover, created: Date.now() })
+      toast(`已建立合集「${name}」`)
+    }
+    // 一本書只放在一個合集裡：從其他合集拿掉
+    const ids = new Set(picked.map((b) => b.name))
+    const keepId = col?.id || list[0].id
+    for (const c of list) if (c.id !== keepId) c.files = c.files.filter((f) => !ids.has(f))
+    saveCollections(list.filter((c) => c.files.length))
+    closeDetail()
+    reload()
+  }
+  const box = h(
+    'div',
+    { class: 'detail-box col-dialog' },
+    h('button', { class: 'close', onclick: closeDetail, title: '關閉 (Esc)' }, '×'),
+    h('h2', {}, `把 ${picked.length} 本做成合集`),
+    h('div', { class: 'tag-group' }, h('span', { class: 'k' }, '放到'), h('div', { class: 'v' }, target)),
+    nameRow,
+    h('div', { class: 'hint-inline' }, '順序就是你點選的順序，之後可以在合集裡調整。選一本當封面：'),
+    coverBox,
+    h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: save }, '確定'), h('button', { class: 'btn', onclick: closeDetail }, '取消')),
+  )
+  if (targetId && cols.some((c) => c.id === targetId)) {
+    target.value = targetId
+    cover = cols.find((c) => c.id === targetId).cover
+  }
+  renderCovers()
+  detailToken++
+  detailEl.replaceChildren(box)
+  detailEl.classList.remove('hidden')
+  if (!targetId) {
+    nameInput.focus()
+    nameInput.select()
+  }
+}
+
+/** 合集的管理視窗：閱讀、跳到某一本、調整順序、換封面、改名、分組、解散 */
+function collectionPopup(item, reload) {
+  const update = async (fn) => {
+    const list = getCollections()
+    const c = list.find((x) => x.id === item.id)
+    if (!c) return
+    fn(c)
+    saveCollections(list.filter((x) => x.files.length))
+    await reload()
+    // 用更新後的內容重畫這個視窗（合集被移空就關掉）
+    const fresh = shelfItems.find((x) => x.isCol && x.id === item.id)
+    if (fresh) collectionPopup(fresh, reload)
+    else closeDetail()
+  }
+  const p = getProgress(colKey(item.col))
+  const actions = h('div', { class: 'actions' })
+  if (p && p.page > 0 && p.page < item.pageCount) {
+    const cur = item.members.findIndex((_, i) => item.members.slice(0, i + 1).reduce((n, b) => n + b.pageCount, 0) > p.page)
+    actions.append(
+      h('button', { class: 'btn primary', onclick: () => openCollection(item, p.page) }, `繼續閱讀（第 ${cur + 1} 本，總第 ${p.page + 1} / ${item.pageCount} 頁）`),
+      h('button', { class: 'btn', onclick: () => openCollection(item, 0) }, '從頭開始'),
+    )
+  } else actions.append(h('button', { class: 'btn primary', onclick: () => openCollection(item, 0) }, '開始閱讀'))
+  actions.append(
+    h(
+      'button',
+      {
+        class: 'btn',
+        title: '到書櫃選要加進這個合集的漫畫',
+        onclick: () => {
+          closeDetail()
+          if (currentNav !== 'library') pages.library()
+          setTimeout(() => startShelfPick?.(item.id), 0)
+        },
+      },
+      '加入漫畫',
+    ),
+    h(
+      'button',
+      {
+        class: 'btn danger',
+        title: '漫畫檔案不會刪除，只是不再組成合集',
+        onclick: () => {
+          if (!confirm(`解散合集「${item.title}」？裡面的漫畫會回到書櫃，檔案不會刪除。`)) return
+          saveCollections(getCollections().filter((c) => c.id !== item.id))
+          setShelfGroup(item.name, '')
+          closeDetail()
+          toast('已解散合集')
+          reload()
+        },
+      },
+      '解散合集',
+    ),
+  )
+
+  const nameInput = h('input', { type: 'text', value: item.title, maxlength: '80' })
+  const rename = () => {
+    const v = nameInput.value.trim()
+    if (!v) return
+    update((c) => (c.name = v))
+    toast('已改名')
+  }
+  nameInput.onkeydown = (e) => {
+    if (e.key === 'Enter') rename()
+  }
+
+  const groups = shelfGroups()
+  const sel = h(
+    'select',
+    {
+      onchange: () => {
+        setShelfGroup(item.name, sel.value)
+        reload()
+      },
+    },
+    h('option', { value: '' }, '未分組'),
+    groups.list.map((g) => h('option', { value: g, selected: g === groups.of[item.name] ? 'selected' : false }, g)),
+  )
+
+  // 每一本：跳到這本開始看、上移、下移、設為封面、從合集拿掉
+  let start = 0
+  const rows = item.members.map((b, i) => {
+    const from = start
+    start += b.pageCount
+    const move = (d) =>
+      update((c) => {
+        const k = c.files.indexOf(b.name)
+        const j = k + d
+        if (k < 0 || j < 0 || j >= c.files.length) return
+        ;[c.files[k], c.files[j]] = [c.files[j], c.files[k]]
+      })
+    return h(
+      'div',
+      {
+        class: `col-row${item.col.cover === b.name ? ' is-cover' : ''}`,
+        draggable: 'true',
+        title: '拖曳可以調整順序',
+        ondragstart: (e) => {
+          e.dataTransfer.setData('text/plain', b.name)
+          e.currentTarget.classList.add('dragging')
+        },
+        ondragend: (e) => e.currentTarget.classList.remove('dragging'),
+        ondragover: (e) => {
+          e.preventDefault()
+          e.currentTarget.classList.add('drop-here')
+        },
+        ondragleave: (e) => e.currentTarget.classList.remove('drop-here'),
+        ondrop: (e) => {
+          e.preventDefault()
+          const from = e.dataTransfer.getData('text/plain')
+          if (!from || from === b.name) return
+          update((c) => {
+            const list = c.files.filter((f) => f !== from)
+            list.splice(list.indexOf(b.name) + (c.files.indexOf(from) < c.files.indexOf(b.name) ? 1 : 0), 0, from)
+            c.files = list
+          })
+        },
+      },
+      h('span', { class: 'drag-handle' }, '⋮⋮'),
+      h('img', { src: b.cover || '', alt: '', onclick: () => openCollection(item, from) }),
+      h('div', { class: 'col-row-body' }, h('div', { class: 'col-row-title' }, `${i + 1}. ${b.title}${b.chapter ? ` ${b.chapter}` : ''}`), h('div', { class: 'dl-st' }, `${b.pageCount} 頁・從總第 ${from + 1} 頁開始${item.col.cover === b.name ? '・封面' : ''}`)),
+      h(
+        'div',
+        { class: 'dl-btns' },
+        h('button', { class: 'btn primary', onclick: () => openCollection(item, from) }, '從這本看'),
+        h('button', { class: 'btn', disabled: i === 0 ? 'disabled' : false, title: '往前移', onclick: () => move(-1) }, '↑'),
+        h('button', { class: 'btn', disabled: i === item.members.length - 1 ? 'disabled' : false, title: '往後移', onclick: () => move(1) }, '↓'),
+        h('button', { class: 'btn', title: '用這本當合集封面', onclick: () => update((c) => (c.cover = b.name)) }, '設為封面'),
+        h(
+          'button',
+          {
+            class: 'btn',
+            title: '從合集拿掉（回到書櫃，不刪檔案）',
+            onclick: () =>
+              update((c) => {
+                c.files = c.files.filter((f) => f !== b.name)
+                if (c.cover === b.name) c.cover = c.files[0]
+              }),
+          },
+          '移出',
+        ),
+      ),
+    )
+  })
+
+  const box = h(
+    'div',
+    { class: 'detail-box book-pop' },
+    h('button', { class: 'close', onclick: closeDetail, title: '關閉 (Esc)' }, '×'),
+    h(
+      'div',
+      { class: 'detail-main' },
+      h('div', { class: 'cover' }, item.cover ? h('img', { src: item.cover, alt: '' }) : null),
+      h(
+        'div',
+        { class: 'meta' },
+        h('span', { class: 'badge col inline' }, '合集'),
+        h('h1', {}, item.title),
+        h('div', { class: 'info' }, h('span', {}, '本數', h('b', {}, String(item.members.length))), h('span', {}, '總頁數', h('b', {}, String(item.pageCount))), item.missing ? h('span', {}, '檔案不見', h('b', {}, `${item.missing} 本`)) : null),
+        h('div', { class: 'tag-group' }, h('span', { class: 'k' }, '名稱'), h('div', { class: 'v group-row' }, nameInput, h('button', { class: 'btn', onclick: rename }, '改名'))),
+        h('div', { class: 'tag-group' }, h('span', { class: 'k' }, '分組'), h('div', { class: 'v group-row' }, sel)),
+        actions,
+      ),
+    ),
+    h('h3', {}, '合集內容（點封面或「從這本看」會從那本的第一頁開始）'),
+    h('div', { class: 'dl-list' }, rows),
+  )
+  detailToken++
+  detailEl.replaceChildren(box)
+  detailEl.classList.remove('hidden')
+}
+
 function openLocal(b, startPage = 0) {
   if (!b.pageCount) return toast('這個檔案裡沒有圖片')
   closeDetail()
@@ -1272,6 +1690,30 @@ async function openReader(d, chapterId, startPage = 0) {
   readerEl.style.setProperty('--page-w', width + 'px')
   const title = h('div', { class: 't' }, SITES[d.site] ? badge(d.site, true) : null, ' ', d.title, chapter && d.chapters.length > 1 ? `　/　${chapter.title}` : '', d.subtitle ? `　/　${d.subtitle}` : '')
   const counter = h('span', {}, '')
+  // 合集：上方多一個「跳到第幾本」的選單
+  let els = []
+  const tocSel = d.toc
+    ? h(
+        'select',
+        {
+          class: 'toc-sel',
+          title: '跳到合集裡某一本的第一頁',
+          onchange: () => {
+            const el = els[d.toc[Number(tocSel.value)].start]
+            if (!el) return
+            stopWheel()
+            // 前面的圖還沒載完會把畫面推走，先釘住這一頁
+            pinEl = el
+            readerEl.scrollTop = el.offsetTop
+            setTimeout(() => {
+              if (pinEl === el) pinEl = null
+            }, 15000)
+            tocSel.blur()
+          },
+        },
+        d.toc.map((t, i) => h('option', { value: i }, `${i + 1}. ${t.title}`)),
+      )
+    : null
   const setW = (dw) => {
     const w = Math.max(400, Math.min(2000, store.get('pageWidth', 900) + dw))
     store.set('pageWidth', w)
@@ -1282,6 +1724,7 @@ async function openReader(d, chapterId, startPage = 0) {
     { class: 'reader-bar' },
     h('button', { onclick: closeReader }, '← 返回'),
     title,
+    tocSel,
     counter,
     d.local ? null : h('button', { onclick: () => download(d, [chapter || d.chapters[0] || null]), title: '下載成 CBZ' }, chapter && d.chapters.length > 1 ? '下載本話' : '下載'),
     h('button', { onclick: () => setW(-100), title: '縮小 (-)' }, '－'),
@@ -1322,7 +1765,7 @@ async function openReader(d, chapterId, startPage = 0) {
     },
     { root: readerEl, rootMargin: '1800px 0px' },
   )
-  const els = imgs.map((p, i) => {
+  els = imgs.map((p, i) => {
     const el = h('div', { class: 'page', 'data-i': i }, `${i + 1}`)
     el.page = p
     observer.observe(el)
@@ -1362,14 +1805,22 @@ async function openReader(d, chapterId, startPage = 0) {
       if (el.offsetTop > mid) break
       cur = Number(el.dataset.i)
     }
-    counter.textContent = `${cur + 1} / ${imgs.length}`
+    if (d.toc) {
+      // 合集：顯示「第幾本 本內頁數 / 這本頁數」，選單跟著換
+      let bi = 0
+      while (bi < d.toc.length - 1 && d.toc[bi + 1].start <= cur) bi++
+      const t = d.toc[bi]
+      if (tocSel && document.activeElement !== tocSel) tocSel.value = String(bi)
+      counter.textContent = `第 ${bi + 1} 本 ${cur - t.start + 1} / ${t.count}（總 ${cur + 1} / ${imgs.length}）`
+    } else counter.textContent = `${cur + 1} / ${imgs.length}`
     // 用畫面頂端那一頁當進度（下次從這頁開頭開始）
     let topPage = 0
     for (const el of els) {
       if (el.offsetTop > y + 60) break
       topPage = Number(el.dataset.i)
     }
-    if (topPage === saved || (pinEl && topPage !== start)) return
+    // 釘住某一頁（繼續閱讀 / 從目錄跳）時，只記那一頁，不記載入中被推來推去的位置
+    if (topPage === saved || (pinEl && topPage !== Number(pinEl.dataset.i))) return
     clearTimeout(saveTimer)
     saveTimer = setTimeout(() => {
       if (token !== readerToken) return
@@ -1748,7 +2199,7 @@ detailEl.addEventListener('click', (e) => {
 })
 
 document.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT') return
+  if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return
   if (!readerEl.classList.contains('hidden')) {
     if (e.key === 'Escape' || e.key === 'Backspace') closeReader()
     else if (e.key === '+' || e.key === '=') readerEl.querySelector('.reader-bar button[title^="放大"]').click()
