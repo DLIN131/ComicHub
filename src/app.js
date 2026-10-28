@@ -206,9 +206,10 @@ const pages = {
     show(sort)
   },
 
-  search(q, sites, { keyword = false } = {}) {
+  /** siteQuery：某些站改用別的搜尋字（例如點標籤時，原本的站用標籤語法，其他站用標籤名） */
+  search(q, sites, { keyword = false, siteQuery = {} } = {}) {
     setNav('search')
-    lastSearch = [q, sites, { keyword }]
+    lastSearch = [q, sites, { keyword, siteQuery }]
     // 輸入編號（或作品網址）時直接開那一本，不做關鍵字搜尋
     const byId = keyword ? null : parseIdQuery(q)
     const useSites = byId ? (byId.sites.length === 1 ? byId.sites : byId.sites.filter((k) => sites.includes(k))) : sites
@@ -270,7 +271,7 @@ const pages = {
           ? SITES[s.site]
               .detail(byId.id)
               .then((d) => ({ items: [{ site: d.site, id: d.id, title: d.title, cover: d.cover, lang: d.lang, sub: d.pages ? `${d.pages} 頁` : '' }], hasMore: false, last: 1 }))
-          : loadFiltered((p) => SITES[s.site].search(q, p), s.page + 1)
+          : loadFiltered((p) => SITES[s.site].search(siteQuery[s.site] || q, p), s.page + 1)
         job
           .then((r) => {
             s.page = r.last
@@ -377,7 +378,9 @@ const pages = {
       shelfBooks = books
       const text = (b) => (b.isCol ? `${b.title} ${b.members.map((m) => m.title).join(' ')} ${b.authors.join(' ')}` : `${b.title} ${b.name} ${(b.authors || []).join(' ')}`)
       const langOk = (b) => (b.isCol ? !lang || b.members.some((m) => passLang(localLang(m))) : passLang(localLang(b)))
-      const visible = items.filter((b) => langOk(b) && (!kw || text(b).toLowerCase().includes(kw)))
+      // 搜尋時合集裡符合的書也單獨列出來（不然加進合集的書就找不到、點不到它自己的管理視窗）
+      const pool = kw ? [...cols, ...books] : items
+      const visible = pool.filter((b) => langOk(b) && (!kw || text(b).toLowerCase().includes(kw)))
       const inGroup = (b, g) => (g === 'all' ? true : g === NO_GROUP ? !groups.of[b.name] : groups.of[b.name] === g)
       const opts = [['all', '全部'], [NO_GROUP, '未分組'], ...groups.list.map((g) => [g, g])]
       tabs.replaceChildren(
@@ -524,6 +527,7 @@ const pages = {
           '開啟漫畫檔…',
         ),
         h('button', { class: 'more', onclick: () => window.hub.dl.openDir() }, '開啟資料夾'),
+        h('button', { class: 'more', title: '匯出成備份檔，電腦重灌後可以還原', onclick: () => backupPopup(load) }, '備份 / 還原'),
         ),
       ),
       tabs,
@@ -666,9 +670,31 @@ const pages = {
         btns.replaceChildren()
         extra.replaceChildren()
         const s = await window.hub.authStatus(k)
+        if (s.remembered) {
+          extra.append(
+            h(
+              'div',
+              { class: 'remember-row' },
+              '已記住密碼：登入失效時會自動重新登入',
+              h(
+                'button',
+                {
+                  class: 'link-btn',
+                  onclick: async () => {
+                    if (!confirm('忘記密碼？之後登入失效時要自己重新登入。')) return
+                    await window.hub.rememberLogin(k, false)
+                    toast('已刪除記住的密碼')
+                    refresh()
+                  },
+                },
+                '忘記密碼',
+              ),
+            ),
+          )
+        }
         if (s.loggedIn) {
           st.className = 'st ok'
-          st.textContent = `已登入${s.name ? `：${s.name}` : ''}`
+          st.textContent = `已登入${s.name ? `：${s.name}` : ''}${s.autoLogin ? '（已自動重新登入）' : ''}`
           btns.append(
             h('button', { class: 'btn', onclick: () => pages.favorites(k) }, '看收藏'),
             h('button', { class: 'btn', onclick: () => window.hub.openSite(k, cfg.sites[k].base + '/') }, '開啟網站'),
@@ -698,7 +724,7 @@ const pages = {
             nameInput.onkeydown = (e) => {
               if (e.key === 'Enter') save()
             }
-            extra.replaceChildren(
+            extra.append(
               h('label', {}, s.name ? '帳號名稱（讀取收藏用，不對可以改）' : '讀不到帳號名稱，請填你的帳號名稱才能讀取收藏'),
               h('div', { class: 'domain' }, nameInput, h('button', { class: 'btn', onclick: save }, '儲存')),
             )
@@ -749,9 +775,11 @@ const pages = {
       h(
         'div',
         { class: 'hint' },
-        '按「登入」會開啟該網站自己的登入頁，帳號密碼直接在網站上輸入，本程式不會經手。',
+        '按「登入」會開啟該網站自己的登入頁，帳號密碼直接在網站上輸入。',
         h('br'),
         '登入成功後關掉那個視窗即可，登入狀態會保存在本機，下次開程式不用重登。各站的登入互相獨立。',
+        h('br'),
+        `${SITES.jm.label} 的登入過一陣子沒用會在網站那邊失效（電腦重開機後常常要重登）：登入時可以選擇讓程式記住密碼（Windows 加密存在這台電腦），失效時自動重新登入。`,
       ),
       h(
         'div',
@@ -832,6 +860,18 @@ async function doLogin(site) {
   const s = await window.hub.login(site)
   if (site === 'jm') SITES.jm.username = s.name || ''
   toast(s.loggedIn ? `${SITES[site].label} 已登入${s.name ? `：${s.name}` : ''}` : `${SITES[site].label} 尚未登入`)
+  // jm 站的登入一陣子沒用就在網站那邊失效（電腦關機、重開機後一定要重登），記住密碼才能自動重新登入
+  if (s.canRemember) {
+    const yes = confirm(
+      `要讓 ComicHub 記住 ${SITES[site].label} 的密碼嗎？\n\n` +
+        '這個站的登入過一陣子沒用就會在網站那邊失效，電腦重開機後通常要重新登入。\n' +
+        '記住密碼的話，登入失效時程式會自動幫你重新登入。\n\n' +
+        '密碼會用 Windows 加密存在這台電腦，只有你的 Windows 帳號解得開；隨時可以在「帳號」頁按「忘記密碼」刪掉。',
+    )
+    const r = await window.hub.rememberLogin(site, yes)
+    s.remembered = r.remembered
+    if (yes) toast('已記住密碼，登入失效時會自動重新登入')
+  }
   return s
 }
 
@@ -873,6 +913,9 @@ async function openDetail(item) {
   renderDetail(box, close, d)
 }
 
+/** 標籤拿到其他站搜尋用的字：去掉 EH 那種「f:」「m:」前綴 */
+const tagWord = (t) => String(t.name || '').replace(/^[a-z]:/, '').trim()
+
 function renderDetail(box, close, d) {
   const groups = {}
   for (const t of d.tags) (groups[t.label] ||= []).push(t)
@@ -889,10 +932,14 @@ function renderDetail(box, close, d) {
             'button',
             {
               class: 'tag',
+              title: `在所有勾選的站搜尋「${tagWord(t)}」（${SITES[d.site].label} 用標籤精確搜尋）`,
               onclick: () => {
                 closeDetail()
-                $('#searchInput').value = t.query
-                pages.search(t.query, [d.site])
+                const word = tagWord(t)
+                $('#searchInput').value = word
+                // 原本的站用它自己的標籤語法；其他站沒有同樣的標籤，用標籤名當關鍵字搜
+                const sites = [...new Set([d.site, ...store.get('searchSites', SITE_KEYS)])]
+                pages.search(word, sites, { keyword: true, siteQuery: { [d.site]: t.query } })
               },
             },
             t.name,
@@ -1107,6 +1154,7 @@ function searchPanel(candidates, onGo) {
 function localCard(b, reload) {
   const site = siteOfLocal(b)
   const group = shelfGroups().of[b.name]
+  const col = getCollections().find((c) => c.files.includes(b.name))
   return h(
     'div',
     { class: `card${b.error ? ' broken' : ''}`, title: b.name, onclick: () => bookPopup(b, reload) },
@@ -1116,7 +1164,7 @@ function localCard(b, reload) {
       b.cover ? h('img', { src: b.cover, loading: 'lazy', alt: '', onerror: (e) => (e.target.style.visibility = 'hidden') }) : h('div', { class: 'broken-icon' }, '!'),
       site ? badge(site) : h('span', { class: 'badge local' }, b.source || '本機'),
       langBadge(localLang(b).lang),
-      group ? h('span', { class: 'group-tag' }, group) : null,
+      col ? h('span', { class: 'group-tag' }, `合集：${col.name}`) : group ? h('span', { class: 'group-tag' }, group) : null,
     ),
     h('div', { class: 'title' }, b.title),
     h(
@@ -1581,6 +1629,7 @@ function collectionPopup(item, reload) {
         'div',
         { class: 'dl-btns' },
         h('button', { class: 'btn primary', onclick: () => openCollection(item, from) }, '從這本看'),
+        h('button', { class: 'btn', title: '這本的管理視窗：用此漫畫搜尋、作者相關作品、刪除…', onclick: () => bookPopup(b, reload) }, '搜尋 / 管理'),
         h('button', { class: 'btn', disabled: i === 0 ? 'disabled' : false, title: '往前移', onclick: () => move(-1) }, '↑'),
         h('button', { class: 'btn', disabled: i === item.members.length - 1 ? 'disabled' : false, title: '往後移', onclick: () => move(1) }, '↓'),
         h('button', { class: 'btn', title: '用這本當合集封面', onclick: () => update((c) => (c.cover = b.name)) }, '設為封面'),
@@ -1622,6 +1671,76 @@ function collectionPopup(item, reload) {
     ),
     h('h3', {}, '合集內容（點封面或「從這本看」會從那本的第一頁開始）'),
     h('div', { class: 'dl-list' }, rows),
+    h('h3', {}, '用此合集搜尋'),
+    searchPanel([
+      { label: '合集名稱', q: cleanTitle(item.title) },
+      ...item.members.map((b) => ({ label: '書名', q: cleanTitle(b.title) })),
+      ...item.authors.map((a) => ({ label: '作者', q: a })),
+    ]),
+  )
+  detailToken++
+  detailEl.replaceChildren(box)
+  detailEl.classList.remove('hidden')
+}
+
+/** 書櫃備份 / 還原視窗：匯出成 JSON、從 JSON（或程式自動備份）還原、加入放漫畫的資料夾 */
+function backupPopup(reload) {
+  const result = h('div', { class: 'backup-result' })
+  const show = (...nodes) => result.replaceChildren(...nodes)
+  const n = (c) => `觀看紀錄 ${c.history} 筆・閱讀進度 ${c.progress} 本・合集 ${c.collections} 個・已分組 ${c.grouped} 本`
+  const doExport = async () => {
+    const r = await window.hub.backup.export()
+    if (r.canceled) return
+    if (!r.ok) return show(status(`匯出失敗：${r.error}`, true))
+    show(h('p', {}, '已匯出：', h('b', {}, r.file)), h('p', { class: 'hint-inline' }, n(r.counts)), h('button', { class: 'btn', onclick: () => window.hub.dl.show(r.file) }, '在資料夾顯示'))
+  }
+  const doImport = async () => {
+    if (!confirm('從備份檔還原：會用備份檔的內容取代目前的觀看紀錄、閱讀進度、合集、分組和設定。\n目前的資料會先另存一份在程式資料夾的 backup，還原錯了可以再還原回來。\n\n要繼續嗎？')) return
+    const r = await window.hub.backup.import()
+    if (r.canceled) return
+    if (!r.ok) return show(status(`還原失敗：${r.error}`, true))
+    const lines = [
+      `已還原${r.exportedAt ? `（備份時間 ${new Date(r.exportedAt).toLocaleString()}${r.host ? `，來自 ${r.host}` : ''}）` : ''}`,
+      n(r.counts),
+      r.missing.length ? `備份裡的漫畫資料夾在這台電腦找不到：\n${r.missing.join('\n')}\n請把漫畫檔（CBZ）複製到下載資料夾，或用「加入漫畫資料夾」選你放漫畫的地方。` : '',
+      `下載資料夾：${r.downloadDir}`,
+      `還原前的資料另存在：${r.safety}`,
+    ].filter(Boolean)
+    alert(lines.join('\n\n'))
+    // 頁面裡的資料是開程式時讀的，重新載入才會換成還原後的內容
+    location.reload()
+  }
+  const doAddDir = async () => {
+    const r = await window.hub.backup.addDir()
+    if (r.canceled) return
+    if (!r.ok) return toast(r.error || '加入失敗')
+    toast('已加入書櫃')
+    reload?.()
+    show(h('p', {}, '已把這個資料夾的漫畫加進書櫃：', h('b', {}, r.dir)))
+  }
+  const box = h(
+    'div',
+    { class: 'detail-box col-dialog' },
+    h('button', { class: 'close', onclick: closeDetail, title: '關閉 (Esc)' }, '×'),
+    h('h2', {}, '書櫃備份 / 還原'),
+    h(
+      'p',
+      { class: 'hint-inline' },
+      '備份檔包含觀看紀錄、閱讀進度、合集、分組、設定和書櫃記得的資料夾，不含漫畫檔本身。電腦重灌前：匯出備份檔，並把下載資料夾裡的漫畫（CBZ）一起複製到隨身碟或雲端。',
+    ),
+    h(
+      'div',
+      { class: 'actions' },
+      h('button', { class: 'btn primary', onclick: doExport }, '匯出備份檔…'),
+      h('button', { class: 'btn', onclick: doImport }, '從備份檔還原…'),
+      h('button', { class: 'btn', title: '漫畫放在下載資料夾以外的地方時，把那個資料夾加進書櫃', onclick: doAddDir }, '加入漫畫資料夾…'),
+    ),
+    h(
+      'p',
+      { class: 'hint-inline' },
+      '重灌後還原：先開 ComicHub，按「從備份檔還原」選備份檔，再把漫畫複製到下載資料夾（或用「加入漫畫資料夾」）。合集、分組、進度是用檔名對應的，換資料夾也沒關係。也可以選程式自動備份的「ComicHub 紀錄備份.json」（在程式資料夾的 backup 裡）。',
+    ),
+    result,
   )
   detailToken++
   detailEl.replaceChildren(box)

@@ -272,4 +272,7 @@ function setup(getDir) {
   ipcMain.handle('lib:external', (_e, file) => !loadIndex().dirs.some((d) => samePath(path.dirname(file), d)))
 }
 
-module.exports = { setup, remember }
+/** 備份用：書櫃記得的資料夾和個別檔案 */
+const indexSnapshot = () => ({ dirs: [...loadIndex().dirs], files: [...loadIndex().files] })
+
+module.exports = { setup, remember, indexSnapshot }

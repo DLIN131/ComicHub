@@ -212,4 +212,14 @@ function setup() {
   })
 }
 
-module.exports = { setup, dir }
+/** 還原備份時用：改下載資料夾（空值 = 回到預設） */
+function setDir(d) {
+  if (d) settings.dir = d
+  else delete settings.dir
+  delete settings.keptLegacy
+  try {
+    fs.writeFileSync(settingsFile(), JSON.stringify(settings, null, 2))
+  } catch {}
+}
+
+module.exports = { setup, dir, setDir }

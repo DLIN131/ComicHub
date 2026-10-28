@@ -1,6 +1,6 @@
 // 抓資料都在主程序做：每個站有自己的 partition（cookie / 登入狀態互不干擾），
 // 一般請求走 session.fetch；遇到 Cloudflare 驗證頁就改用隱藏視窗載入真的網頁，過關後 cookie 留在 partition 裡，之後 fetch 就能直接用。
-const { app, BrowserWindow, session } = require('electron')
+const { app, BrowserWindow, safeStorage, session } = require('electron')
 const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
@@ -36,10 +36,25 @@ function init(ua) {
     })
     keepLoginCookies(site, ses)
   }
-  // jm 站的登入是記在網站伺服器上，大約 30 分鐘沒動作就會被登出；程式開著時每 10 分鐘碰一下「我的」頁保持登入
+  // jm 站的登入是記在網站伺服器上，大約 30 分鐘沒動作就會被登出；程式開著時每 10 分鐘碰一下「我的」頁保持登入。
+  // 電腦關機 / 重開機之後伺服器那邊早就過期了，cookie 還在也沒用 → 使用者同意記住密碼的話，開程式時自動重新登入
   setInterval(() => {
-    if (loadAccounts().jm?.seen) checkAuth('jm').catch(() => {})
+    if (loadAccounts().jm?.seen) authStatus('jm').catch(() => {})
   }, 10 * 60 * 1000)
+  setTimeout(() => {
+    if (loadAccounts().jm?.seen && hasCred('jm')) authStatus('jm').catch(() => {})
+  }, 4000)
+}
+
+const flushTimers = {}
+/** cookie 變動後幾秒內就寫到硬碟（Chromium 平常最多隔 30 秒才寫，關機時沒寫到的就沒了） */
+function flushCookiesSoon(site) {
+  clearTimeout(flushTimers[site])
+  flushTimers[site] = setTimeout(() => sesOf(site).cookies.flushStore().catch(() => {}), 2000)
+}
+/** Windows 登出 / 關機時呼叫：馬上把各站 cookie 寫到硬碟 */
+function flushAllCookies() {
+  return Promise.all(Object.keys(SITES).map((s) => sesOf(s).cookies.flushStore().catch(() => {})))
 }
 
 /**
@@ -48,10 +63,11 @@ function init(ua) {
  */
 function keepLoginCookies(site, ses) {
   ses.cookies.on('changed', (_e, c, _cause, removed) => {
-    if (removed || !c.session) return
     const host = c.domain.replace(/^\./, '')
     const root = rootDomain(new URL(base(site)).hostname)
     if (host !== root && !host.endsWith('.' + root)) return
+    flushCookiesSoon(site)
+    if (removed || !c.session) return
     ses.cookies
       .set({
         url: `${c.secure ? 'https' : 'http'}://${host}${c.path || '/'}`,
@@ -376,14 +392,125 @@ function setAccountName(site, name) {
  * 畫面才能說「登入已過期，請重新登入」，而不是只顯示空的收藏。
  */
 async function authStatus(site) {
-  const s = await checkAuth(site)
+  let s = await checkAuth(site)
   const a = loadAccounts()
+  // 過期了、使用者有讓程式記住密碼 → 自動重新登入一次（5 分鐘內失敗過就不再試，免得一直被網站擋）
+  if (!s.loggedIn && !s.error && a[site]?.seen && hasCred(site)) {
+    if (await autoLogin(site)) {
+      s = await checkAuth(site)
+      if (s.loggedIn) s.autoLogin = true
+    }
+  }
   if (s.loggedIn && !a[site]?.seen) {
     a[site] = { ...a[site], seen: true }
     saveAccounts()
   }
   if (!s.loggedIn && !s.error && a[site]?.seen) s.expired = true
+  s.remembered = hasCred(site)
   return s
+}
+
+// ---------- 記住密碼、自動重新登入（目前只有 jm 需要） ----------
+// 密碼用 Windows 的 DPAPI（Electron safeStorage）加密後存在 accounts.json，只有這台電腦的這個 Windows 帳號解得開。
+// 一定要使用者在登入後按「記住」才會存；登出或按「忘記密碼」就刪掉。
+
+const CRED_SITES = ['jm']
+/** 登入視窗剛拿到、還沒決定要不要記住的帳密（只放記憶體） */
+const pendingCred = {}
+
+const hasCred = (site) => !!loadAccounts()[site]?.cred
+
+function readCred(site) {
+  try {
+    return JSON.parse(safeStorage.decryptString(Buffer.from(loadAccounts()[site].cred, 'base64')))
+  } catch {
+    return null
+  }
+}
+
+/** 登入視窗關掉時呼叫：已經記住過的直接更新（可能換了密碼），不然先放著等使用者決定 */
+function offerCred(site, user, pass) {
+  if (!CRED_SITES.includes(site) || !user || !pass || !safeStorage.isEncryptionAvailable()) return false
+  if (hasCred(site)) {
+    saveCred(site, { user, pass })
+    return false
+  }
+  pendingCred[site] = { user, pass }
+  return true
+}
+
+function saveCred(site, cred) {
+  const a = loadAccounts()
+  a[site] = { ...a[site], cred: safeStorage.encryptString(JSON.stringify(cred)).toString('base64') }
+  saveAccounts()
+}
+
+/** 使用者回答要不要記住密碼；remember=false 也用來「忘記密碼」 */
+function rememberCred(site, remember) {
+  const a = loadAccounts()
+  if (remember && pendingCred[site]) saveCred(site, pendingCred[site])
+  if (!remember && a[site]?.cred) {
+    delete a[site].cred
+    saveAccounts()
+  }
+  delete pendingCred[site]
+  return { ok: true, remembered: hasCred(site) }
+}
+
+const autoLoginState = {}
+/** 用隱藏視窗打開登入頁，填好帳密、勾「記住我」、按登入，等網站登入成功 */
+function autoLogin(site) {
+  const st = (autoLoginState[site] ||= { busy: null, failedAt: 0 })
+  if (st.busy) return st.busy
+  if (Date.now() - st.failedAt < 5 * 60 * 1000) return Promise.resolve(false)
+  const cred = readCred(site)
+  if (!cred) return Promise.resolve(false)
+  const log = (m) => require('./watchdog').log(`auto login ${site}: ${m}`)
+  st.busy = (async () => {
+    const w = new BrowserWindow({ show: false, width: 1000, height: 760, webPreferences: { partition: partition(site), contextIsolation: true, backgroundThrottling: false } })
+    w.webContents.setAudioMuted(true)
+    w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    try {
+      await w.loadURL(loginUrl(site)).catch(() => {})
+      let ok = false
+      for (let i = 0; i < 12 && !ok; i++) {
+        // 頁面上有好幾個登入表單（兩個在隱藏的彈窗裡），填看得到的那一個；按鈕是 type="button"，由網站的程式送出
+        const filled = await w.webContents
+          .executeJavaScript(
+            `(() => {
+              const forms = [...document.querySelectorAll('form')].filter((f) => f.querySelector('input[type="password"]'))
+              const f = forms.find((x) => x.querySelector('input[type="password"]').offsetParent !== null) || forms[0]
+              if (!f) return false
+              const u = f.querySelector('input[name="username"]'), p = f.querySelector('input[type="password"]')
+              u.value = ${JSON.stringify(cred.user)}; p.value = ${JSON.stringify(cred.pass)}
+              for (const el of [u, p]) { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })) }
+              f.querySelectorAll('input[type="checkbox"]').forEach((c) => { if (/remember/i.test(c.name)) c.checked = true })
+              const btn = f.querySelector('.login_submit, button[name="submit_login"], [type="submit"]')
+              if (btn) btn.click(); else f.submit()
+              return true
+            })()`,
+          )
+          .catch(() => false)
+        if (!filled) {
+          // 可能還在 Cloudflare 驗證頁，等一下再試
+          await sleep(2500)
+          continue
+        }
+        for (let j = 0; j < 10 && !ok; j++) {
+          await sleep(2000)
+          ok = (await checkAuth(site).catch(() => ({}))).loggedIn
+        }
+        break
+      }
+      log(ok ? 'ok' : 'failed')
+      if (!ok) st.failedAt = Date.now()
+      return ok
+    } finally {
+      if (!w.isDestroyed()) w.destroy()
+      st.busy = null
+    }
+  })()
+  return st.busy
 }
 
 /** eh 站的帳號在論壇子網域 */
@@ -436,4 +563,25 @@ async function jmReader(id) {
   return { ok: true, data: { aid, title: title.split('|')[0].trim(), pages } }
 }
 
-module.exports = { init, get, bytes, config, setBase, label, base, partition, loginUrl, siteForUrl, authStatus, logout, jmReader, accountName, setAccountName, lastLogin, setLastLogin }
+module.exports = {
+  init,
+  get,
+  bytes,
+  config,
+  setBase,
+  label,
+  base,
+  partition,
+  loginUrl,
+  siteForUrl,
+  authStatus,
+  logout,
+  jmReader,
+  accountName,
+  setAccountName,
+  lastLogin,
+  setLastLogin,
+  offerCred,
+  rememberCred,
+  flushAllCookies,
+}

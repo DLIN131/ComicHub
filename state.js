@@ -132,4 +132,15 @@ function setup() {
   app.on('will-quit', finalFlush)
 }
 
-module.exports = { setup, flush, backupFiles, allBackupFiles }
+/** 匯出用：目前全部資料（複本） */
+const snapshot = () => JSON.parse(JSON.stringify(load()))
+
+/** 從備份檔還原：整份換掉，馬上寫檔和備份 */
+function replaceAll(next) {
+  data = { ...next }
+  delete data._restoredFrom
+  flush()
+  scheduleBackup(true)
+}
+
+module.exports = { setup, flush, backupFiles, allBackupFiles, snapshot, replaceAll }

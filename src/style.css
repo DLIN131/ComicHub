@@ -1277,3 +1277,25 @@ body {
   user-select: text;
   word-break: break-all;
 }
+
+/* 帳號頁：已記住密碼 */
+.remember-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 8px;
+  font-size: 13px;
+  color: var(--dim);
+}
+
+/* 書櫃備份 / 還原 */
+.backup-result:not(:empty) {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel2);
+  word-break: break-all;
+}
+.backup-result p {
+  margin: 4px 0 8px;
+}

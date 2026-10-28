@@ -5,6 +5,7 @@ const downloads = require('./downloads')
 const updater = require('./updater')
 const library = require('./library')
 const state = require('./state')
+const backup = require('./backup')
 const watchdog = require('./watchdog')
 
 // 各站共用一般 Chrome 的 UA，Cloudflare 對 Electron 字樣的 UA 比較容易擋
@@ -60,6 +61,11 @@ function createWindow() {
   })
   mainWin.removeMenu()
   watchdog.watch(mainWin)
+  // Windows 登出 / 關機 / 重開機：程式可能來不及走正常的關閉流程，先把紀錄和各站登入 cookie 寫到硬碟
+  mainWin.on('session-end', () => {
+    state.flush()
+    fetcher.flushAllCookies()
+  })
   mainWin.loadFile(path.join(__dirname, 'src', 'index.html'))
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
@@ -116,8 +122,10 @@ function openSiteWindow(site, url, { login = false } = {}) {
           .catch(() => {})
       })
     }
-    // jm 站登入後的頁面讀不太到帳號名稱（收藏網址要用），所以記下使用者在登入表單打的帳號（只讀帳號欄，不碰密碼）
+    // jm 站登入後的頁面讀不太到帳號名稱（收藏網址要用），所以記下使用者在登入表單打的帳號。
+    // 密碼也先記在記憶體：登入成功後問使用者要不要讓程式記住（加密存起來，重開機後自動重新登入），不同意就丟掉
     let typed = ''
+    let typedPass = ''
     let timer = null
     if (login && site === 'jm') {
       // 沒勾「記住我」的話，網站那邊的登入一陣子沒動就會失效（重開程式後收藏又變空的），所以預設幫忙勾起來
@@ -135,10 +143,11 @@ function openSiteWindow(site, url, { login = false } = {}) {
         win.webContents
           // 頁面上有好幾個帳號欄（另外兩個在隱藏的彈窗裡），要讀使用者看得到、真的在打的那一個
           .executeJavaScript(
-            `(() => { const all = [...document.querySelectorAll('input[name="username"]')]; const seen = all.filter((u) => u.offsetParent !== null && u.value.trim()); return ((seen[0] || all.find((u) => u.value.trim())) || {}).value || '' })()`,
+            `(() => { const all = [...document.querySelectorAll('input[name="username"]')]; const seen = all.filter((u) => u.offsetParent !== null && u.value.trim()); const u = seen[0] || all.find((x) => x.value.trim()); const p = u && u.form && u.form.querySelector('input[type="password"]'); return { user: (u || {}).value || '', pass: (p || {}).value || '' } })()`,
           )
           .then((v) => {
-            if (v && v.trim()) typed = v.trim()
+            if (v?.user?.trim()) typed = v.user.trim()
+            if (v?.pass) typedPass = v.pass
           })
           .catch(() => {})
       }, 1000)
@@ -157,7 +166,7 @@ function openSiteWindow(site, url, { login = false } = {}) {
     win.loadURL(url)
     win.on('closed', () => {
       clearInterval(timer)
-      resolve(typed)
+      resolve({ user: typed, pass: typedPass })
     })
   })
 }
@@ -169,7 +178,7 @@ function setupIpc() {
   ipcMain.handle('jm:reader', (_e, id) => fetcher.jmReader(id))
   ipcMain.handle('auth:status', (_e, site) => fetcher.authStatus(site))
   ipcMain.handle('auth:login', async (_e, site) => {
-    const typed = await openSiteWindow(site, fetcher.loginUrl(site), { login: true })
+    const { user: typed, pass } = await openSiteWindow(site, fetcher.loginUrl(site), { login: true })
     const s = await fetcher.authStatus(site)
     if (s.loggedIn && typed) {
       fetcher.setLastLogin(site, typed)
@@ -177,12 +186,15 @@ function setupIpc() {
         fetcher.setAccountName(site, typed)
         s.name = typed
       }
+      // 頁面會問使用者要不要記住密碼（已經記住過的就直接更新）
+      s.canRemember = fetcher.offerCred(site, typed, pass)
     }
     return s
   })
+  ipcMain.handle('auth:remember', (_e, site, yes) => fetcher.rememberCred(site, !!yes))
   ipcMain.handle('auth:setName', (_e, site, name) => fetcher.setAccountName(site, name))
   ipcMain.handle('auth:logout', (_e, site) => fetcher.logout(site))
-  ipcMain.handle('site:open', (_e, site, url) => openSiteWindow(site, url))
+  ipcMain.handle('site:open', (_e, site, url) => openSiteWindow(site, url).then(() => {}))
   ipcMain.handle('shell:external', (_e, url) => shell.openExternal(url))
   // 「修復程式」：記下來後重開，啟動時清掉 Chromium 的資料（保留紀錄和登入）
   ipcMain.handle('app:repair', () => {
@@ -215,6 +227,7 @@ app.whenReady().then(() => {
   downloads.setup()
   updater.setup()
   library.setup(downloads.dir)
+  backup.setup(() => mainWin)
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

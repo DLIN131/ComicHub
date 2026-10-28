@@ -24,11 +24,12 @@
 | 檔案 | 內容 |
 |---|---|
 | `main.js` | 主視窗、IPC、圖片 Referer、登入視窗（各站自己的登入頁）、單一執行鎖、啟動前清快取 |
-| `fetcher.js` | 各站網路請求。每站一個 partition（`persist:nh` 等，cookie 互不干擾）；Cloudflare 驗證頁改用隱藏視窗載入；站名 / 網址以 **Base64** 存；登入狀態判斷、保持登入、帳號名稱（`accounts.json`） |
+| `fetcher.js` | 各站網路請求。每站一個 partition（`persist:nh` 等，cookie 互不干擾）；Cloudflare 驗證頁改用隱藏視窗載入；站名 / 網址以 **Base64** 存；登入狀態判斷、保持登入、帳號名稱（`accounts.json`）、JM 記住密碼自動重新登入 |
 | `downloads.js` | 下載資料夾設定、CBZ（STORE zip）寫入器、`ComicInfo.xml` |
 | `library.js` | 書櫃：讀 CBZ/ZIP（STORE + DEFLATE，不支援 ZIP64），`cbz://book/<id>/<index>` 自訂協定提供圖片，`library.json` 記住用過的資料夾和外部檔案 |
 | `state.js` | 程式資料存檔 `state.json`（主程序寫檔，原子寫入 + `.bak`），備份到程式資料夾 `backup/` |
 | `paths.js` | 資料預設位置：程式資料夾（打包版 = `ComicHub.exe` 所在；開發 = 專案資料夾），不能寫入時退回 userData |
+| `backup.js` | 書櫃備份 / 還原（匯出 JSON、從 JSON 或自動備份還原、加入漫畫資料夾） |
 | `updater.js` | 程式內更新（下載、解壓、`update.ps1` 覆蓋） |
 | `watchdog.js` | 啟動自我檢查 / 自動修復 / `startup.log` |
 | `preload.js` | `window.hub`（給頁面用的 IPC 介面）、`window.updater` |
@@ -51,7 +52,8 @@
 - **NH**：官方 v2 API。登入 token 在 cookie `access_token`，過期用 `POST /auth/refresh` 換。語言篩選用 `language:xxx`（標籤 id：中 29963、英 12227、日 6346）。
 - **JM**：網頁 HTML（有 Cloudflare，Electron 隱藏視窗可過）。閱讀頁圖片被切條打亂（`scramble_id` 220980，依 md5 算段數）→ canvas 重組；下載時用 OffscreenCanvas 重組後存 JPEG。
   - **同一個帳號同時只能在一個地方登入**：在瀏覽器 / 手機登入（或登出）會把程式這邊踢掉。
-  - 登入狀態判斷：`GET /user/`，沒登入會被導到 `/login`。收藏網址要帳號名稱：登入視窗記下使用者在**看得到的**帳號欄打的字（頁面上有 3 個帳號欄，2 個在隱藏彈窗），不讀密碼。
+  - 登入狀態判斷：`GET /user/`，沒登入會被導到 `/login`。收藏網址要帳號名稱：登入視窗記下使用者在**看得到的**帳號欄打的字（頁面上有 3 個帳號欄，2 個在隱藏彈窗）。
+  - **登入記在網站伺服器上，一陣子沒用就失效**（電腦關機 / 重開機後一定過期，cookie 還在也沒用）。程式開著每 10 分鐘碰一下保持登入；使用者登入後同意「記住密碼」的話，密碼用 `safeStorage`（Windows DPAPI）加密存在 `accounts.json` 的 `cred`，登入失效時用隱藏視窗打開登入頁、填看得到的那個表單、按 `.login_submit`（type=button，由網站的 JS 送出）自動重新登入；失敗後 5 分鐘內不再試。登入表單欄位：`username`、`password`、`id_remember`、按鈕 `submit_login`。
   - 登入頁一開就有整頁廣告，用 `insertCSS` 藏起來；預設勾「記住我」；程式開著每 10 分鐘碰一下保持登入。
 - **WN**：一般 HTML。不存在的編號也回 200 → 沒有封面就當找不到。分類編號對應語言（中 1,9,10,20／日 12,13,14／英 16,17,18）。
 - **EH**：作品編號是 `gid_token`（只能用網址查）。列表翻頁用 `next=` 游標。閱讀頁要再開每一頁拿圖片網址（`resolve(retry)`，重試帶 `nl=` 換伺服器）。登入在論壇子網域，會先出 Cloudflare 驗證。
@@ -61,7 +63,7 @@
 | 位置 | 檔案 | 內容 |
 |---|---|---|
 | `%APPDATA%\ComicHub` | `state.json`、`state.json.bak` | 閱讀進度、紀錄、分組、合集、設定、下載紀錄、更新紀錄快取 |
-| | `accounts.json` | 各站帳號名稱、上次登入的帳號、是否登入過（不含密碼） |
+| | `accounts.json` | 各站帳號名稱、上次登入的帳號、是否登入過；JM 使用者同意時的加密密碼 `cred`（DPAPI，只有這台電腦這個 Windows 帳號解得開；登出或「忘記密碼」就刪） |
 | | `library.json` | 書櫃記得的資料夾、外部加入的檔案 |
 | | `sites.json` | 使用者改過的網站網址 |
 | | `downloads.json` | 使用者自選的下載資料夾（沒有 = 預設） |
@@ -69,6 +71,7 @@
 | | `startup.log`、`update.log` | 問題紀錄（本地時間） |
 | | `Partitions\<站>\Network` | 各站登入 cookie（加密金鑰在 `Local State`） |
 | 程式資料夾（`ComicHub.exe` 旁） | `backup\ComicHub 紀錄備份.json` | `state.json` 的備份（最多每分鐘寫一次 + 關程式時），AppData 被刪時自動還原 |
+| | `backup\ComicHub 還原前的資料 <時間>.json` | 「從備份檔還原」前自動另存的目前資料（匯出格式，可以再還原回來） |
 | | `downloads\` | 下載的漫畫預設位置 |
 
 - 程式資料夾不能寫入（例如 Program Files）→ 這兩個改放 `%APPDATA%\ComicHub`。
@@ -203,3 +206,25 @@ git grep -i -E "<四個站的英文名、網域、中文站名>" -- . ':!package
 - 新增 `paths.js`。觀看紀錄備份改到程式資料夾 `backup\`（舊的在「下載」的會搬過來後刪掉）；新安裝的下載預設 `downloads\`；舊使用者「下載\ComicHub」已有漫畫的繼續用（不自動搬檔案）。
 - `pack.js`、`.gitignore` 排除 `downloads/`、`backup/`。
 - （使用者電腦另外手動處理：把「下載\ComicHub」的漫畫搬到 dist 的 `downloads\`，下載位置改回預設。）
+
+### v1.0.28（2026-10-28）合集裡的書可以搜尋、標籤搜所有站、JM 重開機自動登入、書櫃備份 / 還原
+- **合集裡的書找不到、不能用此漫畫搜尋**：書加進合集後不再單獨顯示，書櫃搜尋只列出合集，點不到那本書的管理視窗（用此漫畫搜尋、作者搜尋）。
+  - 書櫃有搜尋字時，合集裡符合的書也單獨列出（卡片右下標「合集：名稱」）。
+  - 合集視窗每本多一個「搜尋 / 管理」按鈕，開那本的管理視窗；視窗底下加「用此合集搜尋」（合集名、每本書名、作者）。
+- **點標籤只搜原本那一站**：`renderDetail` 的標籤原本是 `pages.search(t.query, [d.site])`。改成搜所有勾選的站：`pages.search` 加 `siteQuery` 選項，原本的站用自己的標籤語法（NH `tag:"…"`、EH `f:"…$"`），其他站用標籤名當關鍵字（`tagWord` 去掉 EH 的 `f:` / `m:` 前綴）。
+- **JM 電腦重開機後要重新登入**：查了使用者的 cookie 資料庫，登入 cookie `AVS` 已經存成 30 天（v1.0.10 的處理有效）。真正原因：JM 的登入記在伺服器上，一陣子沒用就失效，電腦關一晚 cookie 還在也沒用（網站沒有給「記住我」的長效 cookie）。
+  - 登入成功後問使用者要不要「記住密碼」，同意才用 `safeStorage` 加密存（`fetcher.offerCred / rememberCred`）。登入視窗輪詢時一併讀看得到那個表單的密碼欄，只放記憶體，等使用者回答。已經記住過的，重新登入時直接更新。
+  - `authStatus` 發現過期又有記住密碼 → `autoLogin`：隱藏視窗填表、按登入，每 2 秒檢查一次，最多 20 秒。同時只跑一個；失敗後 5 分鐘內不再試；結果記到 startup.log（不記密碼）。開程式 4 秒後的檢查和每 10 分鐘的保持登入都走這裡，所以重開機後一開程式就自動登入。
+  - 帳號頁顯示「已記住密碼」和「忘記密碼」；登出也會刪掉。
+  - 另外：cookie 變動 2 秒後 `flushStore()`；主視窗 `session-end`（Windows 關機 / 登出）時寫 `state.json` 和各站 cookie。
+  - 測試用本機假網站：`sites.json` 把 JM 網址指到 127.0.0.1，假網站有三個登入表單（兩個隱藏），按鈕 type=button 用 fetch 送出，伺服器端 session 可以清掉。測了登入 → 記住 → 過期自動重登 → 密碼錯不重複試 → 重開程式自動登入 → 忘記密碼。**沒有用真的帳號測過**。
+- **書櫃備份 / 還原**（新增 `backup.js`，書櫃頁「備份 / 還原」）：
+  - 匯出格式：`{ app, kind: 'comichub-backup', format: 1, exportedAt, host, state, library: { dirs, files }, downloadDir }`，預設存到程式資料夾 `backup\`。不含漫畫檔，CBZ 要另外複製。
+  - 還原也吃程式自動備份的「ComicHub 紀錄備份.json」（整份就是 state）。流程：
+    1. 目前資料另存「還原前的資料 <時間>.json」
+    2. `state.replaceAll` 換成備份內容
+    3. 書櫃記得的資料夾 / 檔案，這台電腦有的才加回去
+    4. 備份裡的下載資料夾存在就沿用
+    5. 頁面 `location.reload()` 讀新資料
+  - 合集、分組、進度都用檔名對應，漫畫換資料夾也對得起來。
+  - 「加入漫畫資料夾」：重灌後漫畫放在別處時，把資料夾加進書櫃（`library.remember('dirs')`）。

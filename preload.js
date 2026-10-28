@@ -31,6 +31,13 @@ contextBridge.exposeInMainWorld('hub', {
   login: (site) => ipcRenderer.invoke('auth:login', site),
   logout: (site) => ipcRenderer.invoke('auth:logout', site),
   setAccountName: (site, name) => ipcRenderer.invoke('auth:setName', site, name),
+  // 要不要讓程式記住密碼（過期時自動重新登入）；false 也用來忘記已記住的密碼
+  rememberLogin: (site, yes) => ipcRenderer.invoke('auth:remember', site, yes),
+  backup: {
+    export: () => ipcRenderer.invoke('backup:export'),
+    import: () => ipcRenderer.invoke('backup:import'),
+    addDir: () => ipcRenderer.invoke('backup:addDir'),
+  },
   openSite: (site, url) => ipcRenderer.invoke('site:open', site, url),
   external: (url) => ipcRenderer.invoke('shell:external', url),
   dl: {
